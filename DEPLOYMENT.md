@@ -1,4 +1,4 @@
-# Void Empires Deployment Notes
+# Space Conquererz 2 Deployment Notes
 
 ## 1. Supabase database setup
 

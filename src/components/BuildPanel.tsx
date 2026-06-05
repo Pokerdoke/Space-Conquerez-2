@@ -156,7 +156,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   const upgradeCost = nextDev ? PLANET_UPGRADES[nextDev].cost : 0;
 
   return (
-    <div className="space-y-5 p-1 max-h-[350px] overflow-y-auto">
+    <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
       
       {!canBuild && (
         <div className="text-center text-xs text-slate-500 py-4 bg-slate-950/40 border border-slate-900 rounded font-mono">
@@ -292,6 +292,40 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
             </div>
           </div>
 
+          {/* Ground Unit constructions */}
+          <div>
+            <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
+              <span>Ground Barracks</span>
+              {node.development !== 'city' && node.development !== 'metropolis' ? (
+                <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
+              ) : (
+                <span className="text-slate-500 lowercase font-normal">
+                  Built: {groundUnitsBuilt}/{maxGroundUnits}
+                </span>
+              )}
+            </span>
+            
+            <button
+              disabled={
+                (node.development !== 'city' && node.development !== 'metropolis') ||
+                groundUnitsCapReached ||
+                me.resources < GROUND_UNIT_STATS.cost
+              }
+              onClick={handleBuildGroundUnit}
+              className="w-full flex items-center justify-between p-3 border border-slate-800 bg-slate-950/40 rounded hover:border-amber-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
+            >
+              <div>
+                <span className="block text-xs font-semibold text-slate-300">Build Ground Unit ({GROUND_UNIT_STATS.cost}R)</span>
+                <span className="text-[9px] text-slate-500 font-mono block">
+                  HP:{GROUND_UNIT_STATS.hp} | DMG:{GROUND_UNIT_STATS.dmgMin}-{GROUND_UNIT_STATS.dmgMax}
+                </span>
+              </div>
+              <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-2.5 py-1 rounded">
+                {GROUND_UNIT_STATS.cost}R
+              </span>
+            </button>
+          </div>
+
           {/* Shipyard constructions */}
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
@@ -326,39 +360,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
             </div>
           </div>
 
-          {/* Ground Unit constructions */}
-          <div>
-            <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
-              <span>Ground Barracks</span>
-              {node.development !== 'city' && node.development !== 'metropolis' ? (
-                <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
-              ) : (
-                <span className="text-slate-500 lowercase font-normal">
-                  Built: {groundUnitsBuilt}/{maxGroundUnits}
-                </span>
-              )}
-            </span>
-            
-            <button
-              disabled={
-                (node.development !== 'city' && node.development !== 'metropolis') ||
-                groundUnitsCapReached ||
-                me.resources < GROUND_UNIT_STATS.cost
-              }
-              onClick={handleBuildGroundUnit}
-              className="w-full flex items-center justify-between p-3 border border-slate-800 bg-slate-950/40 rounded hover:border-amber-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
-            >
-              <div>
-                <span className="block text-xs font-semibold text-slate-300">Build Ground Unit ({GROUND_UNIT_STATS.cost})</span>
-                <span className="text-[9px] text-slate-500 font-mono block">
-                  HP:{GROUND_UNIT_STATS.hp} | DMG:{GROUND_UNIT_STATS.dmgMin}-{GROUND_UNIT_STATS.dmgMax}
-                </span>
-              </div>
-              <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-2.5 py-1 rounded">
-                {GROUND_UNIT_STATS.cost}R
-              </span>
-            </button>
-          </div>
+
 
         </div>
       )}

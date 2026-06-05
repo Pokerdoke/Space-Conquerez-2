@@ -255,7 +255,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         {/* Title Brand */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-500 drop-shadow-[0_0_20px_rgba(99,102,241,0.6)] select-none uppercase">
-            Void Empires
+            Space Conquererz 2
           </h1>
           <p className="text-xs uppercase tracking-wider text-slate-300 mt-2 font-mono">
             Real-time 4X Galactic Strategy

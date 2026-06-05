@@ -88,8 +88,13 @@ export const App: React.FC = () => {
     const startNode = gameState.nodes.find(n => n.ships.some(s => s.id === selectedShip.id));
     if (!startNode) return;
 
+    if (reachableNodes[targetNodeId] === undefined) {
+      audio.playBeep(160, 0.08);
+      return;
+    }
+
     audio.playMove();
-    const costInMoves = reachableNodes[targetNodeId] || 1;
+    const costInMoves = reachableNodes[targetNodeId];
 
     const updatedNodes = gameState.nodes.map(n => {
       if (n.id === startNode.id) {

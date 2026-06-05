@@ -277,9 +277,14 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
   return nodes;
 }
 
-// Check if a node contains enemy units (for blocking movement/ftl)
+// Check if a node contains enemy combat ships that create a temporary FTL blockade.
+// Destroyers, BattleShips, and Carriers have blocksMovement=true; ColonyShips and Fighters do not.
+// A hostile combat ship does not prevent enemies from entering its system, but it stops pathfinding
+// from continuing through that system, just like a planet-based FTL inhibitor. This also treats
+// NPC/A.I. combat ships as hostile blockers for human players, and human combat ships as blockers
+// for NPC/A.I. pathfinding if NPC movement is added later.
 export function hasEnemyCombatShips(node: StarNode, playerId: string): boolean {
-  return node.ships.some(s => s.owner !== playerId && s.owner !== 'npc' && s.blocksMovement);
+  return node.ships.some(s => s.owner !== playerId && s.blocksMovement);
 }
 
 export function hasEnemyFtlInhibitor(node: StarNode, playerId: string): boolean {

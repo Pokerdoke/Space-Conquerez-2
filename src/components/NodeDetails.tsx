@@ -51,7 +51,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
 
   return (
     <div className={`fixed bottom-0 left-0 right-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-t border-slate-800 backdrop-blur-md shadow-[0_-5px_30px_rgba(0,0,0,0.5)] glass-panel ${
-      isExpanded ? 'h-[440px]' : 'h-[64px]'
+      isExpanded ? 'h-[85dvh] md:h-[520px]' : 'h-[64px]'
     }`}>
       
       {/* 1. Header Drag/Toggle Handler */}
@@ -109,7 +109,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
 
       {/* 2. Expanded Content Tab-Bar & Panels */}
       {isExpanded && (
-        <div className="px-4 mt-3 space-y-3">
+        <div className="px-4 mt-3 space-y-3 h-[calc(100%-92px)] flex flex-col min-h-0">
           
           {/* Tabs Bar */}
           <div className="grid grid-cols-3 gap-2 border-b border-slate-800/60 pb-2">
@@ -151,7 +151,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
           </div>
 
           {/* Active Tab Component */}
-          <div className="mt-2 h-[290px] overflow-hidden">
+          <div className="mt-2 flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 pb-28">
             {activeTab === 'build' && (
               <BuildPanel
                 node={node}
