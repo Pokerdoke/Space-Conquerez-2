@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import type { GameState } from '../types';
 import { createGameRoom, joinGameRoom, updateRoomState, getSavedPlayerName } from '../services/database';
 import { generateMap } from '../services/gameLogic';
-import { Users, Copy, Check, ShieldAlert, Play, ArrowRight, Settings } from 'lucide-react';
+import { Users, Copy, Check, ShieldAlert, Play, ArrowRight, Settings, GraduationCap } from 'lucide-react';
+import { Tutorial } from './Tutorial';
 import { audio } from '../services/audio';
 
 
@@ -14,7 +15,7 @@ interface LobbyProps {
 
 export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode }) => {
   // Lobby Navigation State: 'welcome' | 'create' | 'join' | 'waiting'
-  const [view, setView] = useState<'welcome' | 'create' | 'join' | 'waiting'>('welcome');
+  const [view, setView] = useState<'welcome' | 'create' | 'join' | 'waiting' | 'tutorial'>('welcome');
   const [playerName, setPlayerName] = useState(() => getSavedPlayerName());
   const [roomCode, setRoomCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
@@ -250,7 +251,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
       </button>
 
       {/* Main Container */}
-      <div className="w-full max-w-md z-10">
+      <div className={`w-full ${view === 'tutorial' ? 'max-w-5xl' : 'max-w-md'} z-10`}>
         
         {/* Title Brand */}
         <div className="text-center mb-8">
@@ -299,8 +300,22 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
               >
                 <span>Join Star Sector</span>
               </button>
+
+              <button
+                onClick={() => { audio.playBeep(); setView('tutorial'); }}
+                className="w-full scifi-btn py-3.5 flex items-center justify-center space-x-2 text-base border-cyan-500/40 text-cyan-300 bg-cyan-950/10 hover:border-cyan-400 hover:bg-cyan-950/30"
+              >
+                <GraduationCap className="h-4 w-4" />
+                <span>Tutorial Academy</span>
+              </button>
             </div>
           </div>
+        )}
+
+
+        {/* TUTORIAL VIEW */}
+        {view === 'tutorial' && (
+          <Tutorial onExit={() => { audio.playBeep(); setView('welcome'); }} />
         )}
 
         {/* CREATE VIEW */}

@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, PLANET_UPGRADES, createShip, createGroundUnit } from '../services/gameLogic';
+import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Shield, Star, Anchor } from 'lucide-react';
 
@@ -37,7 +37,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   if (!me) return null;
 
   const groundUnitsBuilt = currentNode.groundUnitsBuiltThisTurn ?? 0;
-  const maxGroundUnits = currentNode.development === 'metropolis' ? 6 : currentNode.development === 'city' ? 3 : 0;
+  const maxGroundUnits = getGroundUnitBuildLimit(currentNode.development);
   const groundUnitsCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
   const canBuildGroundUnit = canBuild && !isBusy && maxGroundUnits > 0 && !groundUnitsCapReached && me.resources >= GROUND_UNIT_STATS.cost;
 
@@ -84,7 +84,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
       audio.playBuild();
       const updatedPlayers = gameState.players.map(p =>
-        p.id === myPlayerId ? { ...p, resources: p.resources - amount } : p
+        p.id === myPlayerId ? { ...p, resources: Math.max(0, Number(p.resources) - amount) } : p
       );
 
       const timestamp = new Date().toISOString();
@@ -106,15 +106,17 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
   const handleUpgradePlanet = async () => {
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
-    const upgradeInfo = PLANET_UPGRADES[latestNode.development];
-    if (!upgradeInfo?.next) return;
-    const nextDev = upgradeInfo.next;
-    const cost = PLANET_UPGRADES[nextDev].cost;
+    const nextDev = getPlanetUpgradeTarget(latestNode.development);
+    if (!nextDev) return;
 
-    await spendResources('upgrade', cost, `Upgraded ${latestNode.name} to ${nextDev.toUpperCase()}`, (n) => {
+    // Use the exact same helper for the displayed price and the amount deducted.
+    // This fixes the bug where an upgrade could show 4R in the UI but charge a stale/wrong amount.
+    const cost = getPlanetUpgradeCost(latestNode.development);
+
+    await spendResources('upgrade', cost, `Upgraded ${latestNode.name} to ${nextDev.toUpperCase()} (-${cost}R)`, (n) => {
       if (n.development !== latestNode.development) return false;
       n.development = nextDev;
-      n.resourceGeneration = PLANET_UPGRADES[nextDev].res;
+      n.resourceGeneration = getPlanetResourceGeneration(nextDev);
     });
   };
 
@@ -196,12 +198,12 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
   const handleBuildGroundUnit = async () => {
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
-    const latestMax = latestNode.development === 'metropolis' ? 6 : latestNode.development === 'city' ? 3 : 0;
+    const latestMax = getGroundUnitBuildLimit(latestNode.development);
     const latestBuilt = latestNode.groundUnitsBuiltThisTurn ?? 0;
     if (latestMax <= 0 || latestBuilt >= latestMax) return;
 
     await spendResources('GroundUnit', GROUND_UNIT_STATS.cost, `Built Ground Unit at ${latestNode.name}`, (n) => {
-      const nodeMax = n.development === 'metropolis' ? 6 : n.development === 'city' ? 3 : 0;
+      const nodeMax = getGroundUnitBuildLimit(n.development);
       const built = n.groundUnitsBuiltThisTurn ?? 0;
       if (nodeMax <= 0 || built >= nodeMax) return false;
       n.groundUnits.push(createGroundUnit(myPlayerId));
@@ -209,9 +211,10 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
     });
   };
 
-  const upgradeInfo = PLANET_UPGRADES[currentNode.development];
-  const nextDev = upgradeInfo?.next;
-  const upgradeCost = nextDev ? PLANET_UPGRADES[nextDev].cost : 0;
+  const nextDev = getPlanetUpgradeTarget(currentNode.development);
+  const upgradeCost = getPlanetUpgradeCost(currentNode.development);
+  const currentGeneration = getPlanetResourceGeneration(currentNode.development);
+  const nextGeneration = nextDev ? getPlanetResourceGeneration(nextDev) : currentGeneration;
 
   return (
     <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
@@ -240,7 +243,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 >
                   <div className="text-left">
                     <span className="block text-xs font-bold text-slate-300">{busyAction === 'upgrade' ? 'Upgrading...' : 'Upgrade Planet'}</span>
-                    <span className="text-[9px] text-slate-500 font-mono capitalize">to {nextDev} (+{PLANET_UPGRADES[nextDev].res} res/turn)</span>
+                    <span className="text-[9px] text-slate-500 font-mono capitalize">to {nextDev} | Gen {currentGeneration}→{nextGeneration}/turn</span>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
                     {upgradeCost}R
