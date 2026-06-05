@@ -79,20 +79,20 @@ function getBiomePalette(biome: PlanetBiome) {
 const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const starsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
-  const brightStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
+  const parallaxStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
 
   if (starsRef.current.length === 0) {
-    starsRef.current = Array.from({ length: 400 }, () => ({
+    starsRef.current = Array.from({ length: 420 }, () => ({
       x: Math.random(),
       y: Math.random(),
-      r: 0.45 + Math.random() * 1.2,
-      o: 0.3 + Math.random() * 0.6,
+      r: 0.45 + Math.random() * 1.15,
+      o: 0.28 + Math.random() * 0.6,
     }));
-    brightStarsRef.current = Array.from({ length: 70 }, () => ({
+    parallaxStarsRef.current = Array.from({ length: 85 }, () => ({
       x: Math.random(),
       y: Math.random(),
-      r: 1 + Math.random() * 1.4,
-      o: 0.25 + Math.random() * 0.35,
+      r: 0.8 + Math.random() * 1.35,
+      o: 0.22 + Math.random() * 0.38,
     }));
   }
 
@@ -101,16 +101,80 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
     const host = canvas?.parentElement;
     if (!canvas || !host) return;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     let raf = 0;
     let resizeObserver: ResizeObserver | null = null;
 
+    const drawWrappedDots = (
+      dots: { x: number; y: number; r: number; o: number }[],
+      width: number,
+      height: number,
+      offsetX: number,
+      offsetY: number,
+      opacityMul = 1
+    ) => {
+      // Draw as a tiled field, so no visible "reset" happens when panning across the center.
+      for (const star of dots) {
+        const baseX = star.x * width;
+        const baseY = star.y * height;
+        const x = ((baseX + offsetX) % width + width) % width;
+        const y = ((baseY + offsetY) % height + height) % height;
+        ctx.fillStyle = `rgba(235,245,255,${star.o * opacityMul})`;
+        ctx.beginPath();
+        ctx.arc(x, y, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    const drawHexGrid = (width: number, height: number, offsetX: number, offsetY: number) => {
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = '#315f9a';
+      ctx.lineWidth = 0.75;
+
+      const radius = 58;
+      const w = Math.sqrt(3) * radius;
+      const verticalStep = radius * 1.5;
+      const horizontalStep = w;
+      const xOffset = ((offsetX * 0.08) % horizontalStep + horizontalStep) % horizontalStep;
+      const yOffset = ((offsetY * 0.08) % verticalStep + verticalStep) % verticalStep;
+
+      for (let row = -2; row < height / verticalStep + 3; row++) {
+        for (let col = -2; col < width / horizontalStep + 3; col++) {
+          const cx = col * horizontalStep + (row % 2 ? horizontalStep / 2 : 0) - xOffset;
+          const cy = row * verticalStep - yOffset;
+          ctx.beginPath();
+          for (let i = 0; i < 6; i++) {
+            const angle = Math.PI / 6 + (Math.PI / 3) * i; // flat-ish sci-fi hexes like the reference
+            const x = cx + Math.cos(angle) * radius;
+            const y = cy + Math.sin(angle) * radius;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+
+      // Very faint diagonal pass adds the layered tactical-screen look without touching the UI.
+      ctx.globalAlpha = 0.045;
+      ctx.strokeStyle = '#6aa7ff';
+      for (let x = -height; x < width + height; x += 120) {
+        ctx.beginPath();
+        ctx.moveTo(x - offsetX * 0.04, 0);
+        ctx.lineTo(x + height - offsetX * 0.04, height);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    };
+
     const draw = () => {
       const width = host.clientWidth;
       const height = host.clientHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const targetW = Math.max(1, Math.floor(width * dpr));
       const targetH = Math.max(1, Math.floor(height * dpr));
       if (canvas.width !== targetW || canvas.height !== targetH) {
@@ -121,72 +185,36 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
 
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, '#020718');
-      bg.addColorStop(0.45, '#07102a');
-      bg.addColorStop(1, '#020617');
+      const bg = ctx.createLinearGradient(0, 0, width, height);
+      bg.addColorStop(0, '#06102b');
+      bg.addColorStop(0.42, '#0b1234');
+      bg.addColorStop(1, '#03131e');
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
-      const parallaxX = ((panX * 0.3) % width + width) % width;
-      const parallaxY = ((panY * 0.3) % height + height) % height;
-
+      // Continuous parallax: no modulo for nebula centers, so the background cannot pop/reset.
+      const px = panX * 0.03;
+      const py = panY * 0.03;
       const nebulaCenters = [
-        { x: width * 0.2 + parallaxX * 0.25, y: height * 0.35 + parallaxY * 0.18, r: Math.min(width, height) * 0.5, c: 'rgba(80, 110, 255, 0.18)' },
-        { x: width * 0.7 - parallaxX * 0.18, y: height * 0.28 + parallaxY * 0.15, r: Math.min(width, height) * 0.46, c: 'rgba(70, 220, 220, 0.12)' },
-        { x: width * 0.5 + parallaxX * 0.15, y: height * 0.72 - parallaxY * 0.2, r: Math.min(width, height) * 0.6, c: 'rgba(120, 80, 255, 0.18)' },
+        { x: width * 0.18 + px, y: height * 0.35 + py * 0.6, r: Math.max(width, height) * 0.55, c: 'rgba(65, 90, 210, 0.18)' },
+        { x: width * 0.62 - px * 0.65, y: height * 0.42 + py * 0.35, r: Math.max(width, height) * 0.48, c: 'rgba(47, 205, 210, 0.11)' },
+        { x: width * 0.42 + px * 0.4, y: height * 0.75 - py * 0.45, r: Math.max(width, height) * 0.62, c: 'rgba(105, 75, 230, 0.16)' },
       ];
 
       nebulaCenters.forEach(({ x, y, r, c }) => {
         const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
         grad.addColorStop(0, c);
-        grad.addColorStop(0.55, c.replace(/0\.\d+\)/, '0.06)'));
+        grad.addColorStop(0.55, c.replace(/0\.\d+\)/, '0.055)'));
         grad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.fillRect(x - r, y - r, r * 2, r * 2);
       });
 
-      ctx.save();
-      ctx.globalAlpha = 0.1;
-      ctx.strokeStyle = '#3b82f6';
-      ctx.lineWidth = 1;
-      const hex = 54;
-      const hexH = Math.sin(Math.PI / 3) * hex;
-      const gridOffsetX = ((panX * 0.12) % (hex * 1.5) + hex * 1.5) % (hex * 1.5);
-      const gridOffsetY = ((panY * 0.12) % (hexH * 2) + hexH * 2) % (hexH * 2);
-      for (let row = -2; row < Math.ceil(height / hexH) + 3; row++) {
-        for (let col = -2; col < Math.ceil(width / (hex * 1.5)) + 3; col++) {
-          const x = col * hex * 1.5 - gridOffsetX;
-          const y = row * hexH + (col % 2 ? hexH / 1 : 0) - gridOffsetY;
-          ctx.beginPath();
-          for (let i = 0; i < 6; i++) {
-            const a = (Math.PI / 3) * i;
-            const px = x + Math.cos(a) * hex * 0.5;
-            const py = y + Math.sin(a) * hex * 0.5;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.closePath();
-          ctx.stroke();
-        }
-      }
-      ctx.restore();
+      drawHexGrid(width, height, panX, panY);
 
-      starsRef.current.forEach((star) => {
-        ctx.fillStyle = `rgba(255,255,255,${star.o})`;
-        ctx.beginPath();
-        ctx.arc(star.x * width, star.y * height, star.r, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      brightStarsRef.current.forEach((star) => {
-        const x = (star.x * width + parallaxX * 0.18) % width;
-        const y = (star.y * height + parallaxY * 0.18) % height;
-        ctx.fillStyle = `rgba(220,235,255,${star.o})`;
-        ctx.beginPath();
-        ctx.arc(x, y, star.r, 0, Math.PI * 2);
-        ctx.fill();
-      });
+      // Deep field stays static; the closer layer moves slowly and wraps seamlessly.
+      drawWrappedDots(starsRef.current, width, height, 0, 0, 1);
+      drawWrappedDots(parallaxStarsRef.current, width, height, panX * 0.12, panY * 0.12, 0.9);
     };
 
     const scheduleDraw = () => {
@@ -211,40 +239,49 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
 
 const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> = ({ type, color, size = 7 }) => {
   const s = size;
+  const common = {
+    filter: 'url(#ship-shadow)',
+  } as React.SVGProps<SVGGElement>;
+
   switch (type) {
     case 'Destroyer':
       return (
-        <g fill={color} stroke="#0f172a" strokeWidth="0.3" opacity="0.96">
-          <path d={`M0 ${-s} L${s * 0.62} ${s * 0.58} L0 ${s * 0.18} L${-s * 0.62} ${s * 0.58} Z`} />
-          <path d={`M0 ${-s * 0.65} L${s * 0.18} ${-s * 0.05} L0 ${s * 0.16} L${-s * 0.18} ${-s * 0.05} Z`} fill="#e2e8f0" opacity="0.45" />
+        <g {...common}>
+          <path d={`M0 ${-s} L${s * 0.6} ${s * 0.58} L0 ${s * 0.18} L${-s * 0.6} ${s * 0.58} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+          <path d={`M0 ${-s * 0.9} L${s * 0.42} ${s * 0.46} L0 ${s * 0.12} L${-s * 0.42} ${s * 0.46} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
+          <path d={`M0 ${-s * 0.62} L${s * 0.12} ${-s * 0.05} L0 ${s * 0.12} L${-s * 0.12} ${-s * 0.05} Z`} fill="#ffffff" opacity="0.55" />
         </g>
       );
     case 'BattleShip':
       return (
-        <g fill={color} stroke="#0f172a" strokeWidth="0.35" opacity="0.98">
-          <path d={`M0 ${-s} L${s * 0.74} ${s * 0.6} L${s * 0.2} ${s * 0.3} L${-s * 0.2} ${s * 0.3} L${-s * 0.74} ${s * 0.6} Z`} />
-          <rect x={-s * 0.12} y={-s * 0.56} width={s * 0.24} height={s * 0.74} rx="0.8" fill="#f8fafc" opacity="0.28" />
+        <g {...common}>
+          <path d={`M0 ${-s} L${s * 0.82} ${s * 0.64} L${s * 0.24} ${s * 0.3} L${-s * 0.24} ${s * 0.3} L${-s * 0.82} ${s * 0.64} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+          <path d={`M0 ${-s * 0.9} L${s * 0.6} ${s * 0.52} L${s * 0.14} ${s * 0.18} L${-s * 0.14} ${s * 0.18} L${-s * 0.6} ${s * 0.52} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
+          <rect x={-s * 0.1} y={-s * 0.55} width={s * 0.2} height={s * 0.65} rx="0.7" fill="#ffffff" opacity="0.42" />
         </g>
       );
     case 'Carrier':
       return (
-        <g fill={color} stroke="#0f172a" strokeWidth="0.35" opacity="0.96">
-          <path d={`M${-s * 0.72} ${s * 0.36} L${-s * 0.52} ${-s * 0.12} L0 ${-s * 0.84} L${s * 0.52} ${-s * 0.12} L${s * 0.72} ${s * 0.36} Z`} />
-          <path d={`M${-s * 0.24} ${-s * 0.02} L0 ${-s * 0.42} L${s * 0.24} ${-s * 0.02}`} stroke="#f8fafc" strokeWidth="0.45" fill="none" opacity="0.42" />
+        <g {...common}>
+          <path d={`M${-s * 0.78} ${s * 0.4} L${-s * 0.55} ${-s * 0.16} L0 ${-s * 0.9} L${s * 0.55} ${-s * 0.16} L${s * 0.78} ${s * 0.4} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+          <path d={`M${-s * 0.58} ${s * 0.26} L${-s * 0.4} ${-s * 0.08} L0 ${-s * 0.68} L${s * 0.4} ${-s * 0.08} L${s * 0.58} ${s * 0.26} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
+          <path d={`M${-s * 0.28} ${-s * 0.02} L0 ${-s * 0.43} L${s * 0.28} ${-s * 0.02}`} stroke="#fff" strokeWidth="0.55" fill="none" opacity="0.55" />
         </g>
       );
     case 'ColonyShip':
       return (
-        <g fill={color} stroke="#0f172a" strokeWidth="0.25" opacity="0.92">
-          <ellipse rx={s * 0.58} ry={s * 0.42} />
-          <path d={`M${-s * 0.22} ${s * 0.38} L0 ${s * 0.8} L${s * 0.22} ${s * 0.38}`} />
-          <circle r={s * 0.18} fill="#ffffff" opacity="0.25" />
+        <g {...common}>
+          <ellipse rx={s * 0.72} ry={s * 0.52} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+          <ellipse rx={s * 0.55} ry={s * 0.38} fill={color} stroke="#0f172a" strokeWidth="0.3" />
+          <path d={`M${-s * 0.22} ${s * 0.35} L0 ${s * 0.82} L${s * 0.22} ${s * 0.35}`} fill={color} stroke="#0f172a" strokeWidth="0.25" />
+          <circle r={s * 0.18} fill="#fff" opacity="0.38" />
         </g>
       );
     case 'Fighter':
       return (
-        <g fill={color} stroke="#0f172a" strokeWidth="0.2" opacity="0.92">
-          <path d={`M0 ${-s * 0.72} L${s * 0.28} ${s * 0.52} L0 ${s * 0.12} L${-s * 0.28} ${s * 0.52} Z`} />
+        <g {...common}>
+          <path d={`M0 ${-s * 0.78} L${s * 0.34} ${s * 0.56} L0 ${s * 0.12} L${-s * 0.34} ${s * 0.56} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="0.8" />
+          <path d={`M0 ${-s * 0.62} L${s * 0.2} ${s * 0.42} L0 ${s * 0.06} L${-s * 0.2} ${s * 0.42} Z`} fill={color} />
         </g>
       );
     default:
@@ -256,7 +293,7 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
   if (development === 'none') return null;
   if (development === 'colony') {
     return (
-      <g opacity="0.96">
+      <g opacity="0.96" filter="url(#structure-shadow)">
         <ellipse cx="0" cy="5.5" rx="7" ry="2" fill="rgba(2,6,23,0.45)" />
         <path d="M-6,4 A6,6 0 0,1 6,4" fill="none" stroke={color} strokeWidth="1.2" />
         <line x1="-7" y1="4" x2="7" y2="4" stroke={color} strokeWidth="1" />
@@ -266,47 +303,70 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
     );
   }
 
-  const skyline = {
+  const iconScale: Record<string, number> = {
+    city: 0.84,
+    metropolis: 0.95,
+    arcology: 1.02,
+    coreworld: 1.08,
+  };
+  const scale = iconScale[development] ?? 0.9;
+  const stroke = '#0ea5e9';
+  const fill = 'rgba(190,242,100,0.86)';
+  const shadow = 'rgba(2,6,23,0.48)';
+
+  const buildings = {
     city: [
-      [-7, 0, 3, 5],
-      [-3.5, -2, 3, 7],
-      [0, -4, 3.2, 9],
-      [3.8, -1, 3, 6],
+      [-8, -2, 4, 8],
+      [-3, -6, 4, 12],
+      [2, -4, 5, 10],
     ],
     metropolis: [
-      [-8, -1, 3, 6],
-      [-4.3, -5, 3.2, 10],
-      [-0.3, -7, 3.3, 12],
-      [3.6, -4, 3.1, 9],
-      [7.1, -2, 2.6, 7],
+      [-9, -1, 3.4, 7],
+      [-5, -6, 3.6, 12],
+      [-0.6, -9, 4.2, 15],
+      [4.3, -4, 4, 10],
+      [8.8, -2, 3, 8],
     ],
     arcology: [
-      [-7.5, -2, 3, 7],
-      [-4, -6, 3.5, 11],
-      [0, -8, 4, 13],
-      [4.5, -5, 3.5, 10],
-      [8.3, -1, 2.6, 6],
+      [-10, -2, 3.5, 8],
+      [-6, -7, 4, 13],
+      [-1, -10, 5, 16],
+      [5, -6, 4, 12],
+      [9.5, -1, 3, 7],
     ],
     coreworld: [
-      [-7.5, -3, 3, 8],
-      [-3.8, -7, 3.6, 12],
-      [0, -10, 4.4, 15],
-      [4.6, -6, 3.6, 11],
-      [8.5, -2, 2.7, 7],
+      [-10, -3, 3.5, 9],
+      [-6, -8, 4, 14],
+      [-1, -12, 5, 18],
+      [5, -7, 4, 13],
+      [9.5, -2, 3, 8],
     ],
   } as Record<string, number[][]>;
 
-  const bars = skyline[development] ?? skyline.city;
   return (
-    <g opacity="0.98">
-      <ellipse cx="0" cy="6" rx="10" ry="2.5" fill="rgba(2,6,23,0.45)" />
-      {bars.map(([x, y, w, h], idx) => (
+    <g transform={`scale(${scale})`} filter="url(#structure-shadow)" opacity="0.98">
+      <line x1="-12" y1="6.4" x2="12" y2="6.4" stroke={stroke} strokeWidth="1.3" strokeLinecap="round" />
+      {(buildings[development] ?? buildings.city).map(([x, y, w, h], idx) => (
         <g key={`${development}-${idx}`}>
-          <rect x={x + 0.7} y={y + 0.8} width={w} height={h} rx="0.4" fill="rgba(2,6,23,0.38)" />
-          <rect x={x} y={y} width={w} height={h} rx="0.4" fill={color} />
+          <rect x={x + 0.9} y={y + 1} width={w} height={h} rx="0.5" fill={shadow} stroke="none" />
+          <rect x={x} y={y} width={w} height={h} rx="0.5" fill={fill} stroke={stroke} strokeWidth="1.1" />
+          {Array.from({ length: Math.max(1, Math.floor(h / 4)) }).map((_, row) => (
+            <line
+              key={`${idx}-win-${row}`}
+              x1={x + w * 0.32}
+              x2={x + w * 0.68}
+              y1={y + 2.6 + row * 3.1}
+              y2={y + 2.6 + row * 3.1}
+              stroke={stroke}
+              strokeWidth="0.55"
+              opacity="0.85"
+            />
+          ))}
         </g>
       ))}
-      <line x1="-10" y1="5.2" x2="10" y2="5.2" stroke="rgba(15,23,42,0.8)" strokeWidth="0.8" />
+      {development === 'coreworld' && (
+        <path d="M-1 -12 L1.5 -16 L4 -12" fill="none" stroke={stroke} strokeWidth="1.1" strokeLinejoin="round" />
+      )}
     </g>
   );
 };
@@ -401,9 +461,9 @@ const PlanetBody: React.FC<{
         </>
       )}
 
-      <ellipse cx="0" cy={radius * 0.95} rx={radius * 1.25} ry={radius * 0.45} fill="rgba(0,0,0,0.35)" />
+      <ellipse cx="2" cy={radius * 1.08} rx={radius * 1.35} ry={radius * 0.52} fill="rgba(0,0,0,0.46)" opacity="0.9" />
 
-      <g clipPath={`url(#${clipId})`}>
+      <g clipPath={`url(#${clipId})`} filter="url(#planet-shadow)">
         <circle r={radius} fill={`url(#${gradientId})`} />
 
         {biome === 'gas' ? (
@@ -531,6 +591,18 @@ export const Map: React.FC<MapProps> = ({
       <GalaxyBackdrop panX={panX} panY={panY} />
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
+        <defs>
+          <filter id="planet-shadow" x="-80%" y="-80%" width="260%" height="260%">
+            <feDropShadow dx="0" dy="8" stdDeviation="5" floodColor="#000000" floodOpacity="0.55" />
+          </filter>
+          <filter id="ship-shadow" x="-90%" y="-90%" width="280%" height="280%">
+            <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" floodColor="#000000" floodOpacity="0.9" />
+            <feDropShadow dx="0" dy="0" stdDeviation="1" floodColor="#7dd3fc" floodOpacity="0.32" />
+          </filter>
+          <filter id="structure-shadow" x="-80%" y="-80%" width="260%" height="260%">
+            <feDropShadow dx="0.7" dy="1.2" stdDeviation="0.9" floodColor="#000000" floodOpacity="0.75" />
+          </filter>
+        </defs>
         <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
           {/* Controlled space overlay */}
           {visibleNodes.map((node) => {
