@@ -63,7 +63,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
   const isDysonSphere = currentNode.isDysonSphere;
 
   return (
-    <div className={`fixed top-[56px] right-0 bottom-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-l border-slate-800 backdrop-blur-md shadow-[-8px_0_30px_rgba(0,0,0,0.45)] glass-panel ${
+    <div className={`fixed top-[56px] right-0 bottom-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-l border-slate-800 backdrop-blur-md shadow-[-8px_0_30px_rgba(0,0,0,0.45)] glass-panel node-details-drawer ${
       isExpanded ? 'w-full sm:w-[380px]' : 'w-[56px]'
     }`}>
       

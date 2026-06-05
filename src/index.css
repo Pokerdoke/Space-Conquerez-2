@@ -257,6 +257,7 @@ button[class*="emerald"]:not(:disabled):active {
 
 .glass-panel::before,
 .holo-panel::before {
+  display: none;
   content: '';
   position: absolute;
   inset: 0;
@@ -274,6 +275,7 @@ button[class*="emerald"]:not(:disabled):active {
 
 .glass-panel::after,
 .holo-panel::after {
+  display: none;
   content: '';
   position: absolute;
   left: -45%;
@@ -328,16 +330,25 @@ header .font-mono {
 }
 
 .planet-sphere {
-  transition: transform 180ms ease, filter 180ms ease;
+  transition: transform 160ms ease, filter 160ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .star-system-node:hover .planet-sphere {
-  transform: none;
+  transform: scale(1.06);
+}
+
+.selected-system-ring {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: systemRingPop 220ms ease-out both, selectedRingSpin 9s linear infinite;
 }
 
 .targeting-reticle {
   transform-origin: center;
-  animation: reticleContract 400ms ease-out both;
+  transform-box: fill-box;
+  animation: systemRingPop 220ms ease-out both;
 }
 
 @keyframes holoMaterialize {
@@ -364,7 +375,7 @@ header .font-mono {
 }
 
 .animate-lane-flow {
-  animation: none;
+  animation: laneFlow 2.1s linear infinite;
 }
 
 @keyframes slowSpin {
@@ -403,6 +414,16 @@ header .font-mono {
   100% { opacity: 1; transform: scale(1) rotate(0deg); }
 }
 
+@keyframes systemRingPop {
+  0% { opacity: 0; transform: scale(1.22); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes selectedRingSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @media (max-width: 900px) {
   .holo-panel {
     backdrop-filter: blur(12px) saturate(1.08);
@@ -410,5 +431,33 @@ header .font-mono {
 
   .system-name-label {
     font-size: 9px;
+  }
+}
+
+
+/* Keep the game map full-height and the selected-system panel in the compact right drawer. */
+.game-map-main,
+main.flex-1 {
+  min-height: 0;
+}
+
+.node-details-drawer {
+  left: auto !important;
+  right: 0 !important;
+  top: 56px !important;
+  bottom: 0 !important;
+  max-width: min(390px, calc(100vw - 12px));
+}
+
+@media (max-width: 640px) {
+  .node-details-drawer {
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: none;
+    max-height: 56vh;
+    border-left: 0;
+    border-top: 1px solid rgba(34, 211, 238, 0.22);
   }
 }

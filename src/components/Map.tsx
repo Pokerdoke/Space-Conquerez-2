@@ -275,81 +275,53 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
   size = 10,
 }) => {
   const s = size;
-  const line = '#dbeafe';
-  const dark = '#020617';
-  const engine = '#67e8f9';
+  const panel = '#dbeafe';
+  const shadow = 'rgba(2, 6, 23, 0.65)';
 
   switch (type) {
     case 'Destroyer':
       return (
-        <g filter="url(#ship-soft-glow)" opacity="0.98">
-          <path
-            d={`M0 ${-s * 1.05} L${s * 0.38} ${-s * 0.2} L${s * 0.72} ${s * 0.52} L${s * 0.18} ${s * 0.2} L0 ${s * 0.68} L${-s * 0.18} ${s * 0.2} L${-s * 0.72} ${s * 0.52} L${-s * 0.38} ${-s * 0.2} Z`}
-            fill={color}
-            stroke={line}
-            strokeWidth="0.45"
-          />
-          <path d={`M0 ${-s * 0.86} L0 ${s * 0.48}`} stroke={dark} strokeWidth="0.45" opacity="0.55" />
-          <path d={`M${-s * 0.34} ${-s * 0.12} L${s * 0.34} ${-s * 0.12}`} stroke={line} strokeWidth="0.35" opacity="0.65" />
-          <circle cx={-s * 0.18} cy={s * 0.42} r={s * 0.09} fill={engine} />
-          <circle cx={s * 0.18} cy={s * 0.42} r={s * 0.09} fill={engine} />
+        <g opacity="0.98" filter="url(#ship-soft-glow)">
+          <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={shadow} transform="translate(0 0.6)" />
+          <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
+          <path d={`M0,${-s * 0.78} L${s * 0.12},${s * 0.08} L0,${s * 0.22} L${-s * 0.12},${s * 0.08} Z`} fill={panel} opacity="0.42" />
+          <line x1={-s * 0.24} y1={s * 0.18} x2={s * 0.24} y2={s * 0.18} stroke="#020617" strokeWidth="0.28" opacity="0.65" />
         </g>
       );
     case 'BattleShip':
       return (
-        <g filter="url(#ship-soft-glow)" opacity="0.98">
-          <path
-            d={`M0 ${-s * 1.15} L${s * 0.92} ${s * 0.42} L${s * 0.28} ${s * 0.26} L${s * 0.18} ${s * 0.74} L${-s * 0.18} ${s * 0.74} L${-s * 0.28} ${s * 0.26} L${-s * 0.92} ${s * 0.42} Z`}
-            fill={color}
-            stroke={line}
-            strokeWidth="0.42"
-          />
-          <path d={`M${-s * 0.26} ${-s * 0.46} H${s * 0.26} L${s * 0.16} ${s * 0.18} H${-s * 0.16} Z`} fill={dark} opacity="0.34" />
-          <rect x={-s * 0.08} y={-s * 0.68} width={s * 0.16} height={s * 0.76} rx="0.6" fill={line} opacity="0.38" />
-          <circle cx={-s * 0.38} cy={s * 0.08} r={s * 0.08} fill={line} opacity="0.7" />
-          <circle cx={s * 0.38} cy={s * 0.08} r={s * 0.08} fill={line} opacity="0.7" />
-          <circle cx={-s * 0.12} cy={s * 0.58} r={s * 0.08} fill={engine} />
-          <circle cx={s * 0.12} cy={s * 0.58} r={s * 0.08} fill={engine} />
+        <g opacity="0.98" filter="url(#ship-soft-glow)">
+          <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={shadow} transform="translate(0 0.8)" />
+          <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={color} stroke={panel} strokeWidth="0.34" />
+          <rect x={-s * 0.12} y={-s * 0.75} width={s * 0.24} height={s * 0.9} rx="0.8" fill={panel} opacity="0.34" />
+          <line x1={-s * 0.42} y1={s * 0.28} x2={s * 0.42} y2={s * 0.28} stroke="#020617" strokeWidth="0.32" opacity="0.6" />
+          <circle cx={0} cy={-s * 0.28} r={s * 0.08} fill="#ffffff" opacity="0.55" />
         </g>
       );
     case 'Carrier':
       return (
-        <g filter="url(#ship-soft-glow)" opacity="0.98">
-          <path
-            d={`M${-s * 0.72} ${-s * 0.62} L${s * 0.72} ${-s * 0.62} L${s * 0.62} ${s * 0.55} L${s * 0.2} ${s * 0.86} L${-s * 0.2} ${s * 0.86} L${-s * 0.62} ${s * 0.55} Z`}
-            fill={color}
-            stroke={line}
-            strokeWidth="0.42"
-          />
-          <path d={`M0 ${-s * 0.88} L${s * 0.5} ${-s * 0.62} H${-s * 0.5} Z`} fill={color} stroke={line} strokeWidth="0.35" />
-          <rect x={-s * 0.42} y={-s * 0.28} width={s * 0.84} height={s * 0.16} rx="0.5" fill={dark} opacity="0.42" />
-          <rect x={-s * 0.1} y={-s * 0.52} width={s * 0.2} height={s * 0.98} rx="0.6" fill={line} opacity="0.28" />
-          <circle cx={-s * 0.34} cy={s * 0.62} r={s * 0.09} fill={engine} />
-          <circle cx={s * 0.34} cy={s * 0.62} r={s * 0.09} fill={engine} />
+        <g opacity="0.98" filter="url(#ship-soft-glow)">
+          <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={shadow} transform="translate(0 0.7)" />
+          <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
+          <rect x={-s * 0.36} y={-s * 0.24} width={s * 0.72} height={s * 0.18} rx="0.6" fill="#020617" opacity="0.42" />
+          <line x1={-s * 0.46} y1={s * 0.18} x2={s * 0.46} y2={s * 0.18} stroke={panel} strokeWidth="0.42" opacity="0.45" />
+          <circle cx={-s * 0.28} cy={s * 0.44} r={s * 0.07} fill="#fff" opacity="0.45" />
+          <circle cx={s * 0.28} cy={s * 0.44} r={s * 0.07} fill="#fff" opacity="0.45" />
         </g>
       );
     case 'ColonyShip':
       return (
-        <g filter="url(#ship-soft-glow)" opacity="0.96">
-          <path d={`M0 ${-s * 0.82} L${s * 0.25} ${-s * 0.08} L${s * 0.16} ${s * 0.66} H${-s * 0.16} L${-s * 0.25} ${-s * 0.08} Z`} fill={color} stroke={line} strokeWidth="0.38" />
-          <circle r={s * 0.38} fill="none" stroke={line} strokeWidth="0.45" opacity="0.7" />
-          <circle r={s * 0.18} fill={dark} opacity="0.45" />
-          <rect x={-s * 0.52} y={-s * 0.05} width={s * 0.28} height={s * 0.1} rx="0.2" fill={color} stroke={line} strokeWidth="0.22" />
-          <rect x={s * 0.24} y={-s * 0.05} width={s * 0.28} height={s * 0.1} rx="0.2" fill={color} stroke={line} strokeWidth="0.22" />
-          <circle cx="0" cy={s * 0.58} r={s * 0.08} fill={engine} />
+        <g opacity="0.94" filter="url(#ship-soft-glow)">
+          <circle r={s * 0.5} fill={color} stroke={panel} strokeWidth="0.3" />
+          <path d={`M${-s * 0.42},${s * 0.08} L0,${s * 0.86} L${s * 0.42},${s * 0.08}`} fill="none" stroke={color} strokeWidth={s * 0.22} strokeLinecap="round" />
+          <circle r={s * 0.22} fill={panel} opacity="0.34" />
         </g>
       );
     case 'Fighter':
       return (
-        <g filter="url(#ship-soft-glow)" opacity="0.97">
-          <path
-            d={`M0 ${-s * 0.95} L${s * 0.28} ${s * 0.42} L${s * 0.1} ${s * 0.2} H${-s * 0.1} L${-s * 0.28} ${s * 0.42} Z`}
-            fill={color}
-            stroke={line}
-            strokeWidth="0.32"
-          />
-          <path d={`M0 ${-s * 0.62} L0 ${s * 0.22}`} stroke={dark} strokeWidth="0.36" opacity="0.55" />
-          <circle cx="0" cy={s * 0.38} r={s * 0.07} fill={engine} />
+        <g opacity="0.96" filter="url(#ship-soft-glow)">
+          <path d={`M0,${-s * 0.82} L${s * 0.34},${s * 0.56} L0,${s * 0.18} L${-s * 0.34},${s * 0.56} Z`} fill={color} stroke={panel} strokeWidth="0.24" />
+          <line x1="0" y1={-s * 0.48} x2="0" y2={s * 0.16} stroke={panel} strokeWidth="0.28" opacity="0.5" />
         </g>
       );
     default:
@@ -360,58 +332,74 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
 // ─── Development / Planet Surface Renderers ───────────────────────────────
 
 const DevelopmentIcon: React.FC<{ development: string }> = ({ development }) => {
+  const windowDots = (xs: number[], ys: number[]) => xs.flatMap((x) => ys.map((y) => (
+    <rect key={`${x}-${y}`} x={x - 0.22} y={y - 0.22} width="0.44" height="0.44" rx="0.08" fill="#e0f2fe" opacity="0.68" />
+  )));
+
   switch (development) {
     case 'colony':
       return (
-        <g fill="none" stroke="#a3e635" strokeWidth="1.2" opacity="0.9">
-          <path d="M-5,2 A5,5 0 0,1 5,2 Z" />
-          <line x1="-6" y1="2" x2="6" y2="2" strokeWidth="1" />
-          <line x1="0" y1="2" x2="0" y2="-4" strokeWidth="0.8" />
-          <circle cx="0" cy="-4.5" r="0.8" fill="#a3e635" stroke="none" />
+        <g opacity="0.96">
+          <ellipse cx="0" cy="5.2" rx="8" ry="1.7" fill="rgba(2,6,23,0.5)" />
+          <path d="M-7,3.8 A7,6 0 0,1 7,3.8 Z" fill="rgba(14,165,233,0.28)" stroke="#a5f3fc" strokeWidth="0.75" />
+          <path d="M-4.6,3.6 A4.6,4 0 0,1 4.6,3.6" fill="none" stroke="#ecfeff" strokeWidth="0.45" opacity="0.8" />
+          <rect x="-1.2" y="-2.8" width="2.4" height="6.6" rx="0.45" fill="#94a3b8" stroke="#dbeafe" strokeWidth="0.35" />
+          <line x1="0" y1="-2.8" x2="0" y2="-6" stroke="#a5f3fc" strokeWidth="0.45" />
+          <circle cx="0" cy="-6.4" r="0.65" fill="#67e8f9" />
         </g>
       );
     case 'city':
       return (
-        <g fill="#60a5fa" stroke="#60a5fa" strokeWidth="0.5" opacity="0.9">
-          <rect x="-7" y="-1" width="4" height="5" rx="0.5" />
-          <rect x="-6" y="-3" width="2" height="2" rx="0.3" />
-          <rect x="-1.5" y="-5" width="3" height="9" rx="0.5" />
-          <rect x="3" y="-2" width="4" height="6" rx="0.5" />
-          <rect x="4" y="-4" width="2" height="2" rx="0.3" />
-          <line x1="-8" y1="4" x2="8" y2="4" strokeWidth="0.8" stroke="#94a3b8" />
+        <g opacity="0.96">
+          <ellipse cx="0" cy="6.5" rx="10.5" ry="2" fill="rgba(2,6,23,0.55)" />
+          <path d="M-10,6.2 C-6,3.2 -2,4 0,2.7 C3,1 6.3,2.7 10,5.8" fill="rgba(15,23,42,0.42)" stroke="#7dd3fc" strokeWidth="0.45" />
+          <rect x="-7.5" y="0.4" width="3.2" height="5.8" rx="0.35" fill="#1e3a8a" stroke="#93c5fd" strokeWidth="0.32" />
+          <rect x="-3.4" y="-2.6" width="3.5" height="8.8" rx="0.38" fill="#164e63" stroke="#67e8f9" strokeWidth="0.32" />
+          <rect x="1.1" y="-1" width="3.6" height="7.2" rx="0.35" fill="#312e81" stroke="#a5b4fc" strokeWidth="0.32" />
+          <rect x="5.4" y="1.8" width="2.7" height="4.4" rx="0.3" fill="#1d4ed8" stroke="#93c5fd" strokeWidth="0.28" />
+          {windowDots([-6.3, -5.2], [2, 3.4, 4.8])}
+          {windowDots([-2.2, -1.1], [-0.8, 0.8, 2.4, 4])}
+          {windowDots([2.4, 3.4], [0.9, 2.5, 4.1])}
         </g>
       );
     case 'metropolis':
       return (
-        <g fill="#c084fc" stroke="#c084fc" strokeWidth="0.4" opacity="0.92">
-          <rect x="-9" y="0" width="3" height="6" rx="0.4" />
-          <rect x="-6" y="-3" width="3.5" height="9" rx="0.4" />
-          <rect x="-2" y="-7" width="4" height="13" rx="0.5" />
-          <polygon points="-2,-7 0,-10 2,-7" fill="#e879f9" />
-          <rect x="2.5" y="-4" width="3.5" height="10" rx="0.4" />
-          <rect x="6" y="-1" width="3" height="7" rx="0.4" />
-          <circle cx="0" cy="-4" r="0.6" fill="#fff" opacity="0.55" />
-          <circle cx="0" cy="-1" r="0.6" fill="#fff" opacity="0.55" />
-          <circle cx="0" cy="2" r="0.6" fill="#fff" opacity="0.55" />
-          <line x1="-10" y1="6" x2="10" y2="6" strokeWidth="0.8" stroke="#94a3b8" />
+        <g opacity="0.98">
+          <ellipse cx="0" cy="7.5" rx="13" ry="2.3" fill="rgba(2,6,23,0.62)" />
+          <path d="M-12,7 C-9,3.8 -4,2.9 0,1.2 C5.5,-1 9.7,2.9 12,6.8" fill="rgba(15,23,42,0.46)" stroke="#c4b5fd" strokeWidth="0.45" />
+          <rect x="-10" y="1.2" width="2.6" height="6" rx="0.35" fill="#1e1b4b" stroke="#818cf8" strokeWidth="0.3" />
+          <rect x="-6.8" y="-2.4" width="3.2" height="9.6" rx="0.38" fill="#312e81" stroke="#a78bfa" strokeWidth="0.35" />
+          <rect x="-2.7" y="-6.7" width="4.8" height="13.9" rx="0.5" fill="#164e63" stroke="#67e8f9" strokeWidth="0.38" />
+          <polygon points="-2.7,-6.7 -0.3,-9.7 2.1,-6.7" fill="#67e8f9" opacity="0.68" />
+          <rect x="2.9" y="-3.8" width="3.8" height="11" rx="0.4" fill="#4c1d95" stroke="#d8b4fe" strokeWidth="0.35" />
+          <rect x="7.3" y="0.2" width="2.7" height="7" rx="0.35" fill="#1e3a8a" stroke="#93c5fd" strokeWidth="0.3" />
+          <path d="M-11,7.1 C-6,5.7 6,5.7 11,7.1" fill="none" stroke="#67e8f9" strokeWidth="0.55" opacity="0.55" />
+          {windowDots([-5.8, -4.8], [-0.5, 1.2, 2.9, 4.6])}
+          {windowDots([-1.3, 0.3], [-4, -2.3, -0.6, 1.1, 2.8, 4.5])}
+          {windowDots([4, 5.2], [-1.6, 0.2, 2, 3.8, 5.6])}
         </g>
       );
     case 'arcology':
       return (
-        <g fill="#22d3ee" stroke="#67e8f9" strokeWidth="0.5" opacity="0.96">
-          <circle r="8" fill="none" strokeWidth="1.2" />
-          <rect x="-5" y="-4" width="3" height="9" rx="0.5" />
-          <rect x="-1.5" y="-7" width="3" height="12" rx="0.5" />
-          <rect x="2" y="-4" width="3" height="9" rx="0.5" />
-          <circle cx="0" cy="-1" r="1" fill="#fff" opacity="0.55" />
+        <g opacity="0.98">
+          <ellipse cx="0" cy="7.8" rx="13.5" ry="2.4" fill="rgba(2,6,23,0.6)" />
+          <path d="M-11,5.5 A11,9 0 0,1 11,5.5" fill="rgba(8,47,73,0.5)" stroke="#67e8f9" strokeWidth="0.7" />
+          <path d="M-7.5,5.5 A7.5,6 0 0,1 7.5,5.5" fill="none" stroke="#cffafe" strokeWidth="0.45" opacity="0.7" />
+          <rect x="-4.8" y="-2.4" width="3.2" height="8.6" rx="0.45" fill="#155e75" stroke="#a5f3fc" strokeWidth="0.32" />
+          <rect x="-0.9" y="-6.2" width="3.2" height="12.4" rx="0.48" fill="#0f766e" stroke="#99f6e4" strokeWidth="0.32" />
+          <rect x="3" y="-1.4" width="3.1" height="7.6" rx="0.45" fill="#1d4ed8" stroke="#bfdbfe" strokeWidth="0.32" />
         </g>
       );
     case 'coreworld':
       return (
-        <g fill="#facc15" stroke="#fde68a" strokeWidth="0.5" opacity="0.98">
-          <circle r="9" fill="none" strokeWidth="1.4" />
-          <path d="M0,-9 L2,-2 L8,-2 L3,1 L5,8 L0,4 L-5,8 L-3,1 L-8,-2 L-2,-2 Z" />
-          <circle r="2" fill="#fff" opacity="0.65" />
+        <g opacity="0.99">
+          <ellipse cx="0" cy="8" rx="14" ry="2.5" fill="rgba(2,6,23,0.64)" />
+          <path d="M-12,6.8 C-7,1.5 -2,-2 2,-4.8 C6,-2 10,2.5 12,6.8" fill="rgba(113,63,18,0.45)" stroke="#fde68a" strokeWidth="0.55" />
+          <rect x="-7" y="-1" width="3.3" height="8" fill="#92400e" stroke="#fbbf24" strokeWidth="0.32" rx="0.4" />
+          <rect x="-2.6" y="-7.2" width="5.2" height="14.2" fill="#b45309" stroke="#fde68a" strokeWidth="0.38" rx="0.48" />
+          <rect x="4" y="-2.5" width="3.6" height="9.5" fill="#78350f" stroke="#fcd34d" strokeWidth="0.32" rx="0.4" />
+          <circle cx="0" cy="-3.6" r="1.2" fill="#fef3c7" opacity="0.82" />
+          <path d="M-9,7 C-4,4.9 4,4.9 9,7" stroke="#fbbf24" strokeWidth="0.58" fill="none" opacity="0.75" />
         </g>
       );
     default:
@@ -536,7 +524,6 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
     <>
       <circle r={orbitRadius} fill="none" stroke="rgba(148, 163, 184, 0.14)" strokeDasharray="2 7" strokeWidth="1" pointerEvents="none" />
       <g pointerEvents="none">
-        <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="5s" repeatCount="indefinite" />
       {display.map((group, i) => {
         const angle = i * angleStep - Math.PI / 2;
         const cx = Math.cos(angle) * orbitRadius;
@@ -767,7 +754,7 @@ export const Map: React.FC<MapProps> = ({
                     strokeDasharray="8 34"
                     opacity={isSelectedPath ? 0.92 : 0.5}
                     strokeLinecap="round"
-                    
+                    className="animate-lane-flow"
                   />
                 </g>
               );
@@ -830,13 +817,23 @@ export const Map: React.FC<MapProps> = ({
                 )}
 
                 {isSelected && (
-                  <g className="targeting-reticle" pointerEvents="none" filter="url(#reticle-glow)">
-                    <circle r={planetR + 24} fill="none" stroke="#f43f5e" strokeWidth="1.7" strokeDasharray="10 7" />
-                    <circle r={planetR + 9} fill="none" stroke="#fda4af" strokeWidth="0.9" opacity="0.72" />
-                    <line x1={-(planetR + 31)} y1="0" x2={-(planetR + 12)} y2="0" stroke="#fb7185" strokeWidth="1.4" />
-                    <line x1={planetR + 12} y1="0" x2={planetR + 31} y2="0" stroke="#fb7185" strokeWidth="1.4" />
-                    <line x1="0" y1={-(planetR + 31)} x2="0" y2={-(planetR + 12)} stroke="#fb7185" strokeWidth="1.4" />
-                    <line x1="0" y1={planetR + 12} x2="0" y2={planetR + 31} stroke="#fb7185" strokeWidth="1.4" />
+                  <g className="selected-system-ring" pointerEvents="none" filter="url(#reticle-glow)">
+                    <circle
+                      r={planetR + 15}
+                      fill="none"
+                      stroke={node.claimedBy ? nodeColor : '#67e8f9'}
+                      strokeWidth="1.6"
+                      strokeDasharray="8 6"
+                      opacity="0.92"
+                    />
+                    <circle
+                      r={planetR + 21}
+                      fill="none"
+                      stroke="#67e8f9"
+                      strokeWidth="0.9"
+                      strokeDasharray="2 8"
+                      opacity="0.55"
+                    />
                   </g>
                 )}
 
@@ -892,7 +889,7 @@ export const Map: React.FC<MapProps> = ({
                 <text
                   y={planetR + 31}
                   textAnchor="middle"
-                  fill={isSelected ? '#fda4af' : isReachable ? '#fde68a' : '#cbd5e1'}
+                  fill={isSelected ? '#67e8f9' : isReachable ? '#fde68a' : '#cbd5e1'}
                   fontSize="11"
                   fontWeight={isSelected ? '800' : '600'}
                   fontFamily="Orbitron, monospace"

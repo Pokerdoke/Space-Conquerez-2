@@ -515,7 +515,7 @@ export const App: React.FC = () => {
       })()}
 
       {/* ═══ 2. MAIN MAP AREA ═══ */}
-      <main className="flex-1 min-h-0 w-full relative z-0 overflow-hidden">
+      <main className="game-map-main flex-1 min-h-0 w-full relative z-0 overflow-hidden">
         <Map
           gameState={gameState}
           myPlayerId={myPlayerId}
