@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
 import { BuildPanel } from './BuildPanel';
 import { FleetPanel } from './FleetPanel';
@@ -14,6 +14,7 @@ interface NodeDetailsProps {
   onSelectShip: (ship: Ship | null) => void;
   onUpdateState: (newState: GameState) => void;
   onClose: () => void;
+  forceCombatTab?: boolean;
 }
 
 export const NodeDetails: React.FC<NodeDetailsProps> = ({
@@ -23,12 +24,20 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
   selectedShip,
   onSelectShip,
   onUpdateState,
-  onClose
+  onClose,
+  forceCombatTab = false
 }) => {
-  const [activeTab, setActiveTab] = useState<'build' | 'fleet' | 'combat'>('fleet');
+  const [activeTab, setActiveTab] = useState<'build' | 'fleet' | 'combat'>(forceCombatTab ? 'combat' : 'fleet');
   
   // Collapse/Expand state for drawer on mobile
   const [isExpanded, setIsExpanded] = useState(true);
+
+  useEffect(() => {
+    if (forceCombatTab) {
+      setActiveTab('combat');
+      setIsExpanded(true);
+    }
+  }, [forceCombatTab, gameState.activeCombatNodeId, gameState.activeCombatUpdatedAt]);
 
   // Always render the latest version of the selected node from gameState.
   // This prevents build/development/troop UI from staying stale until the user clicks away and back.
@@ -54,17 +63,14 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
   const isDysonSphere = currentNode.isDysonSphere;
 
   return (
-    <div className={`fixed bottom-0 left-0 right-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-t border-slate-800 backdrop-blur-md shadow-[0_-5px_30px_rgba(0,0,0,0.5)] glass-panel ${
-      isExpanded ? 'h-[85dvh] md:h-[520px]' : 'h-[64px]'
+    <div className={`fixed top-[56px] right-0 bottom-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-l border-slate-800 backdrop-blur-md shadow-[-8px_0_30px_rgba(0,0,0,0.45)] glass-panel ${
+      isExpanded ? 'w-full sm:w-[380px]' : 'w-[56px]'
     }`}>
       
-      {/* 1. Header Drag/Toggle Handler */}
-      <div 
-        onClick={() => { audio.playBeep(); setIsExpanded(!isExpanded); }}
-        className="h-1 bg-slate-800 w-12 mx-auto rounded-full my-2.5 cursor-pointer hover:bg-slate-700 transition-colors"
-      />
+      {/* 1. Header Collapse Handle */}
+      <div className="h-2" />
 
-      <div className="px-4 flex justify-between items-start">
+      <div className="px-4 flex justify-between items-start gap-2">
         
         {/* Node Metadata Summary */}
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
@@ -74,6 +80,11 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
               {isDysonSphere && (
                 <span className="ml-2 text-[9px] font-extrabold bg-amber-500/20 text-amber-400 border border-amber-500/40 px-1 py-0.5 rounded animate-pulse">
                   DYSON SPHERE
+                </span>
+              )}
+              {forceCombatTab && (
+                <span className="ml-2 text-[9px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/40 px-1 py-0.5 rounded animate-pulse">
+                  LIVE COMBAT
                 </span>
               )}
             </h3>
@@ -99,7 +110,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
             onClick={() => { audio.playBeep(); setIsExpanded(!isExpanded); }}
             className="text-xs uppercase tracking-wider font-bold font-mono text-slate-500 border border-slate-800 bg-slate-950/40 px-2 py-1 rounded hover:text-slate-300"
           >
-            {isExpanded ? 'Collapse' : 'Expand'}
+            {isExpanded ? 'Hide' : 'Open'}
           </button>
           
           <button 

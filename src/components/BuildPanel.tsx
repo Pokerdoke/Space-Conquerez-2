@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit } from '../services/gameLogic';
+import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit, MAX_FRIENDLY_GROUND_UNITS_ON_PLANET, countFriendlyGroundUnits } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Shield, Star, Anchor } from 'lucide-react';
 
@@ -38,7 +38,10 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
   const groundUnitsBuilt = currentNode.groundUnitsBuiltThisTurn ?? 0;
   const maxGroundUnits = getGroundUnitBuildLimit(currentNode.development);
-  const groundUnitsCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
+  const perTurnCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
+  const surfaceFriendlyGround = countFriendlyGroundUnits(currentNode, myPlayerId);
+  const surfaceCapReached = surfaceFriendlyGround >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+  const groundUnitsCapReached = perTurnCapReached || surfaceCapReached;
   const canBuildGroundUnit = canBuild && !isBusy && maxGroundUnits > 0 && !groundUnitsCapReached && me.resources >= GROUND_UNIT_STATS.cost;
 
   const beginAction = (action: BuildAction) => {
@@ -106,12 +109,12 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
   const handleUpgradePlanet = async () => {
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
-    const nextDev = getPlanetUpgradeTarget(latestNode.development);
+    const nextDev = getPlanetUpgradeTarget(latestNode.development, latestNode, gameState.nodes, myPlayerId);
     if (!nextDev) return;
 
     // Use the exact same helper for the displayed price and the amount deducted.
     // This fixes the bug where an upgrade could show 4R in the UI but charge a stale/wrong amount.
-    const cost = getPlanetUpgradeCost(latestNode.development);
+    const cost = getPlanetUpgradeCost(latestNode.development, latestNode, gameState.nodes, myPlayerId);
 
     await spendResources('upgrade', cost, `Upgraded ${latestNode.name} to ${nextDev.toUpperCase()} (-${cost}R)`, (n) => {
       if (n.development !== latestNode.development) return false;
@@ -200,19 +203,19 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
     const latestMax = getGroundUnitBuildLimit(latestNode.development);
     const latestBuilt = latestNode.groundUnitsBuiltThisTurn ?? 0;
-    if (latestMax <= 0 || latestBuilt >= latestMax) return;
+    if (latestMax <= 0 || latestBuilt >= latestMax || countFriendlyGroundUnits(latestNode, myPlayerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return;
 
     await spendResources('GroundUnit', GROUND_UNIT_STATS.cost, `Built Ground Unit at ${latestNode.name}`, (n) => {
       const nodeMax = getGroundUnitBuildLimit(n.development);
       const built = n.groundUnitsBuiltThisTurn ?? 0;
-      if (nodeMax <= 0 || built >= nodeMax) return false;
+      if (nodeMax <= 0 || built >= nodeMax || countFriendlyGroundUnits(n, myPlayerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return false;
       n.groundUnits.push(createGroundUnit(myPlayerId));
       n.groundUnitsBuiltThisTurn = built + 1;
     });
   };
 
-  const nextDev = getPlanetUpgradeTarget(currentNode.development);
-  const upgradeCost = getPlanetUpgradeCost(currentNode.development);
+  const nextDev = getPlanetUpgradeTarget(currentNode.development, currentNode, gameState.nodes, myPlayerId);
+  const upgradeCost = getPlanetUpgradeCost(currentNode.development, currentNode, gameState.nodes, myPlayerId);
   const currentGeneration = getPlanetResourceGeneration(currentNode.development);
   const nextGeneration = nextDev ? getPlanetResourceGeneration(nextDev) : currentGeneration;
 
@@ -251,7 +254,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 </button>
               ) : (
                 <div className="flex items-center justify-center p-2.5 border border-dashed border-slate-850 bg-slate-950/20 rounded text-slate-600 text-xs font-mono uppercase font-bold">
-                  Metropolis Max Level
+                  No Upgrade Available
                 </div>
               )}
 
@@ -348,7 +351,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
               ) : (
                 <span className={`${groundUnitsCapReached ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>
-                  Built: {groundUnitsBuilt}/{maxGroundUnits}
+                  Built: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{MAX_FRIENDLY_GROUND_UNITS_ON_PLANET}
                 </span>
               )}
             </span>

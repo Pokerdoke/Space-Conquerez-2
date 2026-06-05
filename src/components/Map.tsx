@@ -126,6 +126,24 @@ const DevelopmentIcon: React.FC<{ development: string }> = ({ development }) => 
           <line x1="-10" y1="6" x2="10" y2="6" strokeWidth="0.8" stroke="#94a3b8" />
         </g>
       );
+    case 'arcology':
+      return (
+        <g fill="#22d3ee" stroke="#67e8f9" strokeWidth="0.5" opacity="0.95">
+          <circle r="8" fill="none" strokeWidth="1.2" />
+          <rect x="-5" y="-4" width="3" height="9" rx="0.5" />
+          <rect x="-1.5" y="-7" width="3" height="12" rx="0.5" />
+          <rect x="2" y="-4" width="3" height="9" rx="0.5" />
+          <circle cx="0" cy="-1" r="1" fill="#fff" opacity="0.55" />
+        </g>
+      );
+    case 'coreworld':
+      return (
+        <g fill="#facc15" stroke="#fde68a" strokeWidth="0.5" opacity="0.98">
+          <circle r="9" fill="none" strokeWidth="1.4" />
+          <path d="M0,-9 L2,-2 L8,-2 L3,1 L5,8 L0,4 L-5,8 L-3,1 L-8,-2 L-2,-2 Z" />
+          <circle r="2" fill="#fff" opacity="0.65" />
+        </g>
+      );
     default:
       return null;
   }

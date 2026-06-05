@@ -10,7 +10,7 @@ export interface Player {
   uuid?: string;
 }
 
-export type PlanetDevelopment = 'none' | 'colony' | 'city' | 'metropolis';
+export type PlanetDevelopment = 'none' | 'colony' | 'city' | 'metropolis' | 'arcology' | 'coreworld';
 
 export interface GroundUnit {
   id: string;
@@ -61,6 +61,14 @@ export interface StarNode {
   isDysonSphere: boolean;
 }
 
+export interface Alliance {
+  id: string;
+  playerIds: [string, string];
+  status: 'active' | 'breaking';
+  breakRequestedBy?: string;
+  breakEffectiveAfterPlayerId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   playerId: string;
@@ -88,9 +96,14 @@ export interface GameState {
   actionLog: string[];
   winnerId: string | null;
   chat: ChatMessage[];
+  alliances?: Alliance[];
   lastUpdated: string;
   lastAction?: string;
   lastActionAt?: string;
+  /** Last system where action-phase combat happened. Used so every player can watch the live combat panel. */
+  activeCombatNodeId?: string | null;
+  activeCombatUpdatedAt?: string;
+  activeCombatSummary?: string;
   turnTimerMinutes?: number; // Optional turn timer
   turnStartedAt?: string; // ISO string when current turn/phase started
   tutorialScenario?: {

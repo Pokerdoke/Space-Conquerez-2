@@ -5,14 +5,15 @@ import { Map } from './components/Map';
 import { NodeDetails } from './components/NodeDetails';
 import { ChatPanel } from './components/ChatPanel';
 import { SoundToggle } from './components/SoundToggle';
+import { DiplomacyPanel } from './components/DiplomacyPanel';
 import type { GameState, StarNode, Ship } from './types';
 import { subscribeToRoom, updateRoomState, getDbMode } from './services/database';
 import type { DbMode } from './services/database';
-import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters } from './services/gameLogic';
+import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration } from './services/gameLogic';
 import { audio } from './services/audio';
 import { createTutorialScenario, TUTORIAL_PLAYER_ID } from './services/tutorialScenarios';
 import type { TutorialScenarioId } from './services/tutorialScenarios';
-import { Sparkles, ArrowRight } from 'lucide-react';
+import { Sparkles, ArrowRight, Handshake } from 'lucide-react';
 
 
 export const App: React.FC = () => {
@@ -29,6 +30,7 @@ export const App: React.FC = () => {
 
   // Settings Overlay
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isDiplomacyOpen, setIsDiplomacyOpen] = useState(false);
   const [dbMode, setDbMode] = useState<DbMode>(() => getDbMode());
 
   // Fog of war setting
@@ -91,9 +93,21 @@ export const App: React.FC = () => {
       setReachableNodes({});
       return;
     }
-    const range = getReachableNodes(selectedNode.id, selectedShip, gameState.nodes, myPlayerId);
+    const range = getReachableNodes(selectedNode.id, selectedShip, gameState.nodes, myPlayerId, gameState);
     setReachableNodes(range);
   }, [selectedShip, selectedNode, gameState, myPlayerId]);
+
+  // Spectators should automatically see the live combat panel when the active player commits combat.
+  useEffect(() => {
+    if (!gameState || gameState.status !== 'playing' || gameState.phase !== 2 || !gameState.activeCombatNodeId) return;
+    const active = gameState.players[gameState.activePlayerIndex];
+    if (active?.id === myPlayerId) return;
+    const combatNode = gameState.nodes.find(n => n.id === gameState.activeCombatNodeId);
+    if (combatNode) {
+      setSelectedNode(combatNode);
+      setSelectedShip(null);
+    }
+  }, [gameState?.activeCombatNodeId, gameState?.activeCombatUpdatedAt, gameState?.phase, gameState?.status, myPlayerId]);
 
   // Handle ship movement — NO auto-colonize; colony ships must use action in phase 2
   const handleMoveShip = async (targetNodeId: string) => {
@@ -166,6 +180,12 @@ export const App: React.FC = () => {
       nextPhase = 2;
       logEntries.push(`--- Phase 2: Action & Combat [${activePlayer.name}] ---`);
     } else {
+      // Alliance break requests become active only after the breaking player's action phase ends.
+      if (gameState.alliances?.some(a => a.status === 'breaking' && a.breakEffectiveAfterPlayerId === activePlayer.id)) {
+        const broken = gameState.alliances.filter(a => a.status === 'breaking' && a.breakEffectiveAfterPlayerId === activePlayer.id);
+        gameState.alliances = gameState.alliances.filter(a => !(a.status === 'breaking' && a.breakEffectiveAfterPlayerId === activePlayer.id));
+        broken.forEach(a => logEntries.push(`Alliance ended between ${gameState.players.find(p => p.id === a.playerIds[0])?.name || 'Player'} and ${gameState.players.find(p => p.id === a.playerIds[1])?.name || 'Player'}.`));
+      }
       nextPhase = 0;
       nextPlayerIndex = (gameState.activePlayerIndex + 1) % gameState.players.length;
       if (nextPlayerIndex === 0) nextTurnNumber += 1;
@@ -174,7 +194,11 @@ export const App: React.FC = () => {
       logEntries.push(`--- Phase 0: Planetary Build ---`);
 
       const ownedNodes = gameState.nodes.filter(n => n.claimedBy === newActivePlayer.id);
-      const totalYield = ownedNodes.reduce((acc, curr) => acc + curr.resourceGeneration, 0);
+      const totalYield = ownedNodes.reduce((acc, curr) => acc + getEffectiveResourceGeneration(curr, newActivePlayer.id), 0);
+      const overcrowded = ownedNodes.filter(n => n.groundUnits.filter(g => g.owner === newActivePlayer.id).length > 6);
+      if (overcrowded.length > 0) {
+        logEntries.push(`Overcrowding penalty: ${overcrowded.length} planet(s) produce 0 income until garrison is 6 or fewer.`);
+      }
       gameState.players = gameState.players.map(p =>
         p.id === newActivePlayer.id ? { ...p, resources: p.resources + totalYield } : p
       );
@@ -200,6 +224,9 @@ export const App: React.FC = () => {
       actionLog: [...gameState.actionLog, ...logEntries],
       lastAction: 'next_phase',
       lastActionAt: new Date().toISOString(),
+      activeCombatNodeId: null,
+      activeCombatUpdatedAt: new Date().toISOString(),
+      activeCombatSummary: undefined,
       turnStartedAt: new Date().toISOString()
     };
 
@@ -221,7 +248,9 @@ export const App: React.FC = () => {
       ...gameState, status: 'playing', players: resetPlayers, activePlayerIndex: 0,
       phase: 0, nodes, turnNumber: 1,
       actionLog: ['=== REMATCH: Galaxy Map Re-seeded ==='],
-      winnerId: null, lastUpdated: new Date().toISOString()
+      winnerId: null, lastUpdated: new Date().toISOString(),
+      activeCombatNodeId: null,
+      activeCombatSummary: undefined
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
@@ -236,7 +265,9 @@ export const App: React.FC = () => {
     const updatedState: GameState = {
       ...gameState, status: 'lobby',
       players: gameState.players.map(p => ({ ...p, ready: p.id === myPlayerId, homeworldId: '' })),
-      nodes: [], winnerId: null, actionLog: ['Game ended. Returned to lobby.']
+      nodes: [], winnerId: null, actionLog: ['Game ended. Returned to lobby.'],
+      activeCombatNodeId: null,
+      activeCombatSummary: undefined
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
@@ -442,6 +473,10 @@ export const App: React.FC = () => {
               </label>
               <SoundToggle />
               <button
+                onClick={() => setIsDiplomacyOpen(true)}
+                className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all flex items-center gap-1"
+              ><Handshake className="h-3 w-3" /> DIP</button>
+              <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all"
               >⚙</button>
@@ -480,7 +515,7 @@ export const App: React.FC = () => {
         )}
 
         {/* In-Game log console (top-left corner, desktop only) */}
-        <div className="absolute left-3 top-3 z-10 w-56 max-h-32 bg-slate-900/80 border border-slate-700/60 rounded p-2 overflow-y-auto text-[9px] font-mono text-slate-400 space-y-0.5 pointer-events-auto shadow-lg hidden md:block backdrop-blur-sm">
+        <div className="absolute right-3 top-20 z-10 w-60 max-h-32 bg-slate-900/80 border border-slate-700/60 rounded p-2 overflow-y-auto text-[9px] font-mono text-slate-400 space-y-0.5 pointer-events-auto shadow-lg hidden md:block backdrop-blur-sm">
           <div className="border-b border-slate-700 pb-1 mb-1 font-bold text-indigo-400 text-[9px] uppercase tracking-wider">Event Journal</div>
           {gameState.actionLog.slice(-12).reverse().map((log, idx) => (
             <div key={idx} className="leading-tight text-[9px] border-b border-slate-900/30 pb-0.5">{log}</div>
@@ -509,7 +544,7 @@ export const App: React.FC = () => {
 
       {/* ═══ 4. NEXT PHASE BUTTON (fixed bottom-right when it's my turn) ═══ */}
       {isMyActiveTurn && gameState.status === 'playing' && (
-        <div className="fixed bottom-4 right-4 z-40">
+        <div className="fixed bottom-4 right-44 z-40">
           <button
             onClick={handleNextPhase}
             className="flex items-center space-x-2 px-5 py-3 scifi-btn scifi-btn-primary shadow-2xl rounded text-sm tracking-wider"
@@ -532,10 +567,15 @@ export const App: React.FC = () => {
           onSelectShip={setSelectedShip}
           onUpdateState={handleUpdateGameState}
           onClose={() => { setSelectedNode(null); setSelectedShip(null); }}
+          forceCombatTab={gameState.phase === 2 && gameState.activeCombatNodeId === selectedNode.id}
         />
       )}
 
-      {/* ═══ 6. SETTINGS OVERLAY ═══ */}
+      {/* ═══ 6. DIPLOMACY / SETTINGS OVERLAYS ═══ */}
+      {isDiplomacyOpen && (
+        <DiplomacyPanel gameState={gameState} myPlayerId={myPlayerId} onClose={() => setIsDiplomacyOpen(false)} onUpdateState={handleUpdateGameState} />
+      )}
+
       {isSettingsOpen && (
         <SettingsDialog onClose={() => setIsSettingsOpen(false)} onModeChanged={handleSettingsChanged} />
       )}

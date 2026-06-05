@@ -17,7 +17,7 @@ export const SHIP_STATS = {
   BattleShip: { cost: 15, hp: 20, dmgMin: 3, dmgMax: 9, blocksMovement: true },
   Carrier: { cost: 7, hp: 12, dmgMin: 1, dmgMax: 3, blocksMovement: true, capacity: 3, maxFighters: 2 },
   ColonyShip: { cost: 5, hp: 10, dmgMin: 0, dmgMax: 0, blocksMovement: false },
-  Fighter: { cost: 5, hp: 8, dmgMin: 2, dmgMax: 4, blocksMovement: false }
+  Fighter: { cost: 3, hp: 5, dmgMin: 1, dmgMax: 3, blocksMovement: false }
 };
 
 export const GROUND_UNIT_STATS = { cost: 3, hp: 10, dmgMin: 1, dmgMax: 4 };
@@ -62,24 +62,77 @@ export const STRUCTURE_COSTS = {
   Gateway: 10
 };
 
-export const PLANET_UPGRADES = {
-  none: { cost: 0, res: 1, next: 'colony' as PlanetDevelopment },
-  colony: { cost: 2, res: 2, next: 'city' as PlanetDevelopment },
-  city: { cost: 4, res: 4, next: 'metropolis' as PlanetDevelopment },
-  metropolis: { cost: 12, res: 8, next: null }
+export const PLANET_UPGRADES: Record<PlanetDevelopment, { cost: number; res: number; next: PlanetDevelopment | null; level: number }> = {
+  none: { cost: 0, res: 1, next: 'colony', level: 0 },
+  colony: { cost: 2, res: 2, next: 'city', level: 1 },
+  city: { cost: 4, res: 4, next: 'metropolis', level: 2 },
+  metropolis: { cost: 12, res: 8, next: 'arcology', level: 3 },
+  arcology: { cost: 22, res: 12, next: 'coreworld', level: 4 },
+  coreworld: { cost: 38, res: 18, next: null, level: 5 }
 };
 
-export function getPlanetUpgradeTarget(development: PlanetDevelopment): PlanetDevelopment | null {
-  return PLANET_UPGRADES[development]?.next ?? null;
+export const MAX_FRIENDLY_GROUND_UNITS_ON_PLANET = 6;
+
+export function getPlanetLevel(development: PlanetDevelopment): number {
+  return PLANET_UPGRADES[development]?.level ?? 0;
 }
 
-export function getPlanetUpgradeCost(development: PlanetDevelopment): number {
-  const target = getPlanetUpgradeTarget(development);
+export function isAllied(state: Pick<GameState, 'alliances'>, playerA: string | null, playerB: string | null): boolean {
+  if (!playerA || !playerB || playerA === playerB || playerA === 'npc' || playerB === 'npc') return false;
+  return (state.alliances || []).some(a => a.status === 'active' && a.playerIds.includes(playerA) && a.playerIds.includes(playerB));
+}
+
+export function isHostileOwner(state: Pick<GameState, 'alliances'>, viewerId: string, ownerId: string | null): boolean {
+  if (!ownerId || ownerId === viewerId) return false;
+  if (isAllied(state, viewerId, ownerId)) return false;
+  return true;
+}
+
+export function getPlanetUpgradeTarget(
+  development: PlanetDevelopment,
+  node?: StarNode,
+  nodes?: StarNode[],
+  ownerId?: string
+): PlanetDevelopment | null {
+  const target = PLANET_UPGRADES[development]?.next ?? null;
+  if (!target) return null;
+  if (!node || !nodes || !ownerId) return target;
+
+  // Advanced economy rule:
+  // Level 4 requires every adjacent owned non-Dyson planet to be at least level 3.
+  // Level 5 requires every adjacent owned non-Dyson planet to be at least level 4.
+  // Dyson spheres do not count as neighbors for the requirement.
+  const requiredNeighborLevel = target === 'arcology' ? 3 : target === 'coreworld' ? 4 : 0;
+  if (requiredNeighborLevel === 0) return target;
+
+  const ownedNeighbors = node.links
+    .map(id => nodes.find(n => n.id === id))
+    .filter((n): n is StarNode => n !== undefined && !n.isDysonSphere && n.claimedBy === ownerId);
+
+  if (ownedNeighbors.length === 0) return null;
+  return ownedNeighbors.every(n => getPlanetLevel(n.development) >= requiredNeighborLevel) ? target : null;
+}
+
+export function getPlanetUpgradeCost(
+  development: PlanetDevelopment,
+  node?: StarNode,
+  nodes?: StarNode[],
+  ownerId?: string
+): number {
+  const target = getPlanetUpgradeTarget(development, node, nodes, ownerId);
   return target ? PLANET_UPGRADES[target].cost : 0;
 }
 
 export function getPlanetResourceGeneration(development: PlanetDevelopment): number {
   return PLANET_UPGRADES[development]?.res ?? 1;
+}
+
+export function getEffectiveResourceGeneration(node: StarNode, ownerId: string): number {
+  if (node.claimedBy !== ownerId) return 0;
+  const friendlyTroops = node.groundUnits.filter(g => g.owner === ownerId).length;
+  // Overcrowded captured worlds still belong to you, but they produce no income until garrison <= 6.
+  if (friendlyTroops > MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return 0;
+  return node.resourceGeneration;
 }
 
 export function getGroundUnitBuildLimit(development: PlanetDevelopment): number {
@@ -336,12 +389,12 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
 // from continuing through that system, just like a planet-based FTL inhibitor. This also treats
 // NPC/A.I. combat ships as hostile blockers for human players, and human combat ships as blockers
 // for NPC/A.I. pathfinding if NPC movement is added later.
-export function hasEnemyCombatShips(node: StarNode, playerId: string): boolean {
-  return node.ships.some(s => s.owner !== playerId && s.blocksMovement);
+export function hasEnemyCombatShips(node: StarNode, playerId: string, state?: Pick<GameState, 'alliances'>): boolean {
+  return node.ships.some(s => s.blocksMovement && (state ? isHostileOwner(state, playerId, s.owner) : s.owner !== playerId));
 }
 
-export function hasEnemyFtlInhibitor(node: StarNode, playerId: string): boolean {
-  return node.hasFtlInhibitor && node.claimedBy !== null && node.claimedBy !== playerId;
+export function hasEnemyFtlInhibitor(node: StarNode, playerId: string, state?: Pick<GameState, 'alliances'>): boolean {
+  return node.hasFtlInhibitor && node.claimedBy !== null && (state ? isHostileOwner(state, playerId, node.claimedBy) : node.claimedBy !== playerId);
 }
 
 // Calculate movement range for a ship using Breadth First Search (BFS)
@@ -349,12 +402,19 @@ export function getReachableNodes(
   startNodeId: string, 
   ship: Ship, 
   nodes: StarNode[], 
-  playerId: string
+  playerId: string,
+  state?: Pick<GameState, 'alliances'>
 ): { [nodeId: string]: number } {
   const reachable: { [nodeId: string]: number } = {};
   const queue: { id: string; dist: number }[] = [{ id: startNodeId, dist: 0 }];
   
   const nodeMap = new Map<string, StarNode>(nodes.map(n => [n.id, n]));
+  const startNode = nodeMap.get(startNodeId);
+  if (startNode && (hasEnemyCombatShips(startNode, playerId, state) || hasEnemyFtlInhibitor(startNode, playerId, state))) {
+    // If you are sitting in an enemy/hostile FTL inhibitor system, you can enter it but cannot move through or out
+    // until the inhibitor ships are destroyed or the planet is captured/allied.
+    return {};
+  }
   
   // Find all friendly gateways
   const friendlyGateways = new Set(
@@ -377,8 +437,8 @@ export function getReachableNodes(
     // Determine pathfinding branches. If the node has enemy ships or enemy FTL inhibitor, it blocks movement!
     // The ship can MOVE to this node, but CANNOT pass through it. So we stop branching here.
     const isBlocked = id !== startNodeId && (
-      hasEnemyCombatShips(currentNode, playerId) || 
-      hasEnemyFtlInhibitor(currentNode, playerId)
+      hasEnemyCombatShips(currentNode, playerId, state) || 
+      hasEnemyFtlInhibitor(currentNode, playerId, state)
     );
 
     if (isBlocked) {
@@ -514,19 +574,26 @@ export function resolveSpaceCombat(
   attackerNode: StarNode,
   defenderNode: StarNode
 ): CombatResult {
-  // Deal damage simultaneously
+  // Carrier fighter screen: carried fighters must be destroyed before the carrier takes hull damage.
+  let actualDefender = defender;
+  let defenderIsCarriedFighter = false;
+  if (defender.type === 'Carrier' && defender.carriedFighters.length > 0 && attacker.owner !== defender.owner) {
+    actualDefender = defender.carriedFighters[0];
+    defenderIsCarriedFighter = true;
+  }
+
   const attDmg = rollDamage(attacker.dmgMin, attacker.dmgMax);
-  const defDmg = rollDamage(defender.dmgMin, defender.dmgMax);
+  const defDmg = rollDamage(actualDefender.dmgMin, actualDefender.dmgMax);
 
   attacker.hp = Math.max(0, attacker.hp - defDmg);
-  defender.hp = Math.max(0, defender.hp - attDmg);
+  actualDefender.hp = Math.max(0, actualDefender.hp - attDmg);
   
   // Combat resets healing timer
   attacker.turnsInTerritory = 0;
-  defender.turnsInTerritory = 0;
+  actualDefender.turnsInTerritory = 0;
 
   const attackerDestroyed = attacker.hp <= 0;
-  const defenderDestroyed = defender.hp <= 0;
+  const defenderDestroyed = actualDefender.hp <= 0;
   let carriedLossesCount = 0;
 
   // Handle destruction of Carrier carried units
@@ -535,17 +602,20 @@ export function resolveSpaceCombat(
     attacker.carriedUnits = [];
     attacker.carriedFighters = [];
   }
-  if (defenderDestroyed && defender.type === 'Carrier') {
+  if (defenderDestroyed && defender.type === 'Carrier' && !defenderIsCarriedFighter) {
     carriedLossesCount += defender.carriedUnits.length + defender.carriedFighters.length;
     defender.carriedUnits = [];
     defender.carriedFighters = [];
+  }
+  if (defenderIsCarriedFighter && defenderDestroyed) {
+    defender.carriedFighters = defender.carriedFighters.filter(f => f.id !== actualDefender.id);
   }
 
   // Remove destroyed ships from respective nodes
   if (attackerDestroyed) {
     attackerNode.ships = attackerNode.ships.filter(s => s.id !== attacker.id);
   }
-  if (defenderDestroyed) {
+  if (defenderDestroyed && !defenderIsCarriedFighter) {
     defenderNode.ships = defenderNode.ships.filter(s => s.id !== defender.id);
   }
 
@@ -612,6 +682,15 @@ export function resetGroundUnitBuildCounters(nodes: StarNode[]): StarNode[] {
   return nodes.map(node => ({ ...node, groundUnitsBuiltThisTurn: 0 }));
 }
 
+export function countFriendlyGroundUnits(node: StarNode, playerId: string): number {
+  return node.groundUnits.filter(g => g.owner === playerId).length;
+}
+
+export function canAddFriendlyGroundUnit(node: StarNode, playerId: string): boolean {
+  return countFriendlyGroundUnits(node, playerId) < MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+}
+
+
 export function loadGroundUnitToCarrier(
   state: GameState,
   nodeId: string,
@@ -634,8 +713,6 @@ export function loadGroundUnitToCarrier(
   // Atomic sync: remove from planet surface and add to carrier cargo in the same new state.
   node.groundUnits = node.groundUnits.filter(g => g.id !== unitId);
   carrier.carriedUnits = [...carrier.carriedUnits.filter(g => g.id !== unitId), unit];
-  // New rules: carriers carry ground units only.
-  carrier.carriedFighters = [];
   next.actionLog = [...next.actionLog, `${player.name}: Loaded Ground Unit into Carrier at ${node.name}.`];
   next.lastAction = 'load_ground_unit';
   next.lastActionAt = currentTimestamp();
@@ -659,11 +736,11 @@ export function unloadGroundUnitFromCarrier(
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
   const unit = carrier?.carriedUnits.find(g => g.id === unitId);
   if (!carrier || !unit) return state;
+  if (countFriendlyGroundUnits(node, playerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET && !node.groundUnits.some(g => g.id === unitId)) return state;
 
   // Duplication fix: if the ground unit already exists on the node, never append it again.
   const alreadyOnSurface = node.groundUnits.some(g => g.id === unitId);
   carrier.carriedUnits = carrier.carriedUnits.filter(g => g.id !== unitId);
-  carrier.carriedFighters = [];
   if (!alreadyOnSurface) {
     node.groundUnits = [...node.groundUnits, unit];
   }
@@ -680,6 +757,56 @@ export function unloadGroundUnitFromCarrier(
   return next;
 }
 
+
+export function loadFighterToCarrier(
+  state: GameState,
+  nodeId: string,
+  carrierId: string,
+  fighterId: string,
+  playerId: string
+): GameState {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) return state;
+  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
+  const fighter = node.ships.find(s => s.id === fighterId && s.type === 'Fighter' && s.owner === playerId);
+  if (!carrier || !fighter) return state;
+  if (carrier.carriedFighters.length >= 2) return state;
+  node.ships = node.ships.filter(s => s.id !== fighterId);
+  carrier.carriedFighters = [...carrier.carriedFighters.filter(f => f.id !== fighterId), fighter];
+  next.actionLog = [...next.actionLog, `${player.name}: Loaded Fighter into Carrier at ${node.name}.`];
+  next.lastAction = 'load_fighter';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return next;
+}
+
+export function unloadFighterFromCarrier(
+  state: GameState,
+  nodeId: string,
+  carrierId: string,
+  fighterId: string,
+  playerId: string
+): GameState {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) return state;
+  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
+  const fighter = carrier?.carriedFighters.find(f => f.id === fighterId);
+  if (!carrier || !fighter) return state;
+  carrier.carriedFighters = carrier.carriedFighters.filter(f => f.id !== fighterId);
+  if (!node.ships.some(s => s.id === fighterId)) node.ships.push({ ...fighter, movesLeft: 0 });
+  next.actionLog = [...next.actionLog, `${player.name}: Launched Fighter from Carrier at ${node.name}.`];
+  next.lastAction = 'unload_fighter';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return next;
+}
+
 export interface InvasionResult {
   state: GameState;
   report: string[];
@@ -688,8 +815,8 @@ export interface InvasionResult {
   failed?: boolean;
 }
 
-function canInvadeNode(node: StarNode, playerId: string): boolean {
-  return node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== playerId);
+function canInvadeNode(node: StarNode, playerId: string, state?: Pick<GameState, 'alliances'>): boolean {
+  return node.isNpcPlanet || (node.claimedBy !== null && isHostileOwner(state || { alliances: [] }, playerId, node.claimedBy));
 }
 
 // Drops every ground unit from every friendly carrier over the selected enemy/NPC planet.
@@ -708,11 +835,11 @@ export function invadePlanetWithCarriers(
   }
 
   const isActive = next.players[next.activePlayerIndex]?.id === playerId;
-  const enemyCombatShips = node.ships.some(s => s.owner !== playerId && s.blocksMovement);
+  const enemyCombatShips = node.ships.some(s => s.blocksMovement && isHostileOwner(next, playerId, s.owner));
   const carriers = node.ships.filter(s => s.owner === playerId && s.type === 'Carrier' && s.carriedUnits.length > 0);
   const totalTroops = carriers.reduce((sum, carrier) => sum + carrier.carriedUnits.length, 0);
 
-  if (!isActive || next.phase !== 2 || !canInvadeNode(node, playerId) || enemyCombatShips || totalTroops === 0) {
+  if (!isActive || next.phase !== 2 || !canInvadeNode(node, playerId, next) || enemyCombatShips || totalTroops === 0) {
     return { state, report: [], captured: false, startedGroundCombat: false };
   }
 
@@ -726,13 +853,12 @@ export function invadePlanetWithCarriers(
   }
   const deploying = Array.from(deployingById.values());
   const deployingIds = new Set(deploying.map(g => g.id));
-  const defenderCountBeforeDeploy = node.groundUnits.filter(g => g.owner !== playerId).length;
+  const defenderCountBeforeDeploy = node.groundUnits.filter(g => isHostileOwner(next, playerId, g.owner)).length;
 
   // Atomic sync: remove every deployed unit from every carrier and add each unit once to the node.
   // This also cleans up any older duplicate cargo references from previous saves.
   for (const carrier of carriers) {
     carrier.carriedUnits = [];
-    carrier.carriedFighters = [];
   }
   node.groundUnits = [
     ...node.groundUnits.filter(g => !deployingIds.has(g.id)),
@@ -815,16 +941,16 @@ export function resolveGroundCombatRound(
   if (!node || !player) return null;
 
   const isActive = next.players[next.activePlayerIndex]?.id === playerId;
-  const enemyCombatShips = node.ships.some(s => s.owner !== playerId && s.blocksMovement);
+  const enemyCombatShips = node.ships.some(s => s.blocksMovement && isHostileOwner(next, playerId, s.owner));
   if (!isActive || next.phase !== 2 || enemyCombatShips) return null;
 
   const attacker = node.groundUnits.find(g => g.id === attackerUnitId && g.owner === playerId);
-  const defender = node.groundUnits.find(g => g.id === defenderUnitId && g.owner !== playerId);
+  const defender = node.groundUnits.find(g => g.id === defenderUnitId && isHostileOwner(next, playerId, g.owner));
   if (!attacker || !defender) return null;
 
   const result = resolveGroundCombat(attacker, defender, node);
   const remainingAttackers = node.groundUnits.filter(g => g.owner === playerId);
-  const remainingDefenders = node.groundUnits.filter(g => g.owner !== playerId);
+  const remainingDefenders = node.groundUnits.filter(g => isHostileOwner(next, playerId, g.owner));
   const captured = remainingDefenders.length === 0 && remainingAttackers.length > 0;
   const failed = remainingAttackers.length === 0 && !captured;
 

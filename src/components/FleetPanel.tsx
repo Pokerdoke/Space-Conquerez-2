@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { GameState, StarNode, Ship, GroundUnit } from '../types';
 import { audio } from '../services/audio';
 import { Navigation, PackageOpen, Plus, Minus, Shield } from 'lucide-react';
-import { loadGroundUnitToCarrier, unloadGroundUnitFromCarrier } from '../services/gameLogic';
+import { loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, MAX_FRIENDLY_GROUND_UNITS_ON_PLANET, countFriendlyGroundUnits } from '../services/gameLogic';
 
 interface FleetPanelProps {
   node: StarNode;
@@ -95,14 +95,33 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
 
   const handleUnloadTroop = (carrier: Ship, unit: GroundUnit) => {
     const key = troopButtonKey('unload', carrier.id, unit.id);
-    if (busyTroops.has(key)) return;
+    if (busyTroops.has(key) || surfaceFull) return;
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBeep(600, 0.04);
     onUpdateState(unloadGroundUnitFromCarrier(gameState, node.id, carrier.id, unit.id, myPlayerId));
   };
 
+  const handleLoadFighter = (carrier: Ship, fighter: Ship) => {
+    const key = troopButtonKey('load-fighter', carrier.id, fighter.id);
+    if (busyTroops.has(key)) return;
+    setBusyTroops(prev => new Set(prev).add(key));
+    audio.playBeep(740, 0.04);
+    onUpdateState(loadFighterToCarrier(gameState, node.id, carrier.id, fighter.id, myPlayerId));
+  };
+
+  const handleUnloadFighter = (carrier: Ship, fighter: Ship) => {
+    const key = troopButtonKey('unload-fighter', carrier.id, fighter.id);
+    if (busyTroops.has(key)) return;
+    setBusyTroops(prev => new Set(prev).add(key));
+    audio.playBeep(540, 0.04);
+    onUpdateState(unloadFighterFromCarrier(gameState, node.id, carrier.id, fighter.id, myPlayerId));
+  };
+
   const friendlyGroundUnits = node.groundUnits.filter(g => g.owner === myPlayerId);
   const friendlyCarriers = node.ships.filter(s => s.type === 'Carrier' && s.owner === myPlayerId);
+  const friendlyFighters = node.ships.filter(s => s.type === 'Fighter' && s.owner === myPlayerId);
+  const friendlySurfaceCount = countFriendlyGroundUnits(node, myPlayerId);
+  const surfaceFull = friendlySurfaceCount >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
   const canManageTroops = isMyTurn && isMovePhase && isFriendlyNode;
 
   return (
@@ -212,7 +231,8 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                 {canManageTroops && (
                                   <button
                                     onClick={() => handleUnloadTroop(ship, unit)}
-                                    disabled={busyTroops.has(key)}
+                                    disabled={busyTroops.has(key) || surfaceFull}
+                                    title={surfaceFull ? 'Surface garrison is full (6/6)' : undefined}
                                     className="min-h-[44px] text-[8px] font-bold uppercase px-2 py-1 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-500 transition-all disabled:opacity-40"
                                   >
                                     {busyTroops.has(key) ? 'Saving...' : 'Unload'}
@@ -223,6 +243,36 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                           })}
                         </div>
                       )}
+
+                      <div className="border-t border-slate-900 pt-2 space-y-1">
+                        <div className="flex justify-between items-center text-[9px] text-slate-500 font-bold">
+                          <span>CARRIER FIGHTER BAY</span>
+                          <span>Fighters: {ship.carriedFighters.length}/2</span>
+                        </div>
+                        {ship.carriedFighters.length === 0 ? (
+                          <div className="text-[9px] text-slate-600 italic">No fighters loaded.</div>
+                        ) : (
+                          <div className="space-y-1">
+                            {ship.carriedFighters.map((fighter, idx) => {
+                              const key = troopButtonKey('unload-fighter', ship.id, fighter.id);
+                              return (
+                                <div key={fighter.id} className="flex justify-between gap-2 items-center text-cyan-400 font-semibold">
+                                  <span>• Fighter {idx + 1} ({fighter.hp}/{fighter.maxHp} HP)</span>
+                                  {canManageTroops && (
+                                    <button
+                                      onClick={() => handleUnloadFighter(ship, fighter)}
+                                      disabled={busyTroops.has(key)}
+                                      className="min-h-[44px] text-[8px] font-bold uppercase px-2 py-1 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-500 transition-all disabled:opacity-40"
+                                    >
+                                      {busyTroops.has(key) ? 'Saving...' : 'Launch'}
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
 
                       {carrierExpanded && (
                         <div className="border border-indigo-950 bg-indigo-950/15 p-3 rounded space-y-3 animate-fadeIn">
@@ -262,6 +312,34 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                 )}
                               </div>
 
+                              <div>
+                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-1 font-mono">
+                                  Load Fighters into Carrier
+                                </div>
+                                {friendlyFighters.length === 0 ? (
+                                  <div className="text-[10px] text-slate-600 font-mono italic">No friendly fighters in orbit here.</div>
+                                ) : (
+                                  <div className="space-y-1">
+                                    {friendlyFighters.map((fighter, idx) => {
+                                      const key = troopButtonKey('load-fighter', ship.id, fighter.id);
+                                      const full = ship.carriedFighters.length >= 2;
+                                      return (
+                                        <div key={fighter.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded border border-slate-900">
+                                          <span className="text-cyan-400 font-mono">Fighter {idx + 1} ({fighter.hp}/{fighter.maxHp} HP)</span>
+                                          <button
+                                            onClick={() => handleLoadFighter(ship, fighter)}
+                                            disabled={full || busyTroops.has(key)}
+                                            className="min-h-[44px] px-2 rounded bg-slate-900 border border-slate-800 hover:border-cyan-500 text-cyan-400 disabled:opacity-30"
+                                          >
+                                            {busyTroops.has(key) ? '...' : <Plus className="h-3 w-3" />}
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+
                               {ship.carriedUnits.length > 0 && (
                                 <div>
                                   <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-1 font-mono">
@@ -275,7 +353,8 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                           <span className="text-amber-500 font-mono">Cargo Troop {idx + 1} ({unit.hp}/{unit.maxHp} HP)</span>
                                           <button
                                             onClick={() => handleUnloadTroop(ship, unit)}
-                                            disabled={busyTroops.has(key)}
+                                            disabled={busyTroops.has(key) || surfaceFull}
+                                            title={surfaceFull ? 'Surface garrison is full (6/6)' : undefined}
                                             className="min-h-[44px] px-2 rounded bg-slate-900 border border-slate-800 hover:border-red-500 text-red-400 disabled:opacity-30"
                                           >
                                             {busyTroops.has(key) ? '...' : <Minus className="h-3 w-3" />}
@@ -301,7 +380,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
 
       <div>
         <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
-          Ground Units on Surface ({node.groundUnits.length})
+          Ground Units on Surface ({node.groundUnits.length}) — Friendly {friendlySurfaceCount}/{MAX_FRIENDLY_GROUND_UNITS_ON_PLANET}
         </span>
 
         {node.groundUnits.length === 0 ? (

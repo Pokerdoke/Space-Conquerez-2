@@ -6,6 +6,8 @@ import {
   updateRoomState,
   updateLobbySettings,
   getSavedPlayerName,
+  getGameRoomState,
+  leaveGameRoom,
   listPublicGameRooms,
   subscribeToPublicGameRooms,
   type PublicGameSummary
@@ -61,17 +63,17 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
   // Public game browser
   const [publicGames, setPublicGames] = useState<PublicGameSummary[]>([]);
   const [publicLoading, setPublicLoading] = useState(false);
+  const [resumePrompt, setResumePrompt] = useState<{ code: string; state: GameState; playerId: string } | null>(null);
 
   const savePlayerName = (name: string) => {
     setPlayerName(name);
     localStorage.setItem('void_empires_player_name', name);
   };
 
-  const findMyPlayerId = (state: GameState, fallbackName: string) => {
+  const findMyPlayerId = (state: GameState) => {
     const savedId = localStorage.getItem('void_empires_player_id');
     return (
       state.players.find(p => p.id === savedId)?.id ||
-      state.players.find(p => p.name.trim().toLowerCase() === fallbackName.trim().toLowerCase())?.id ||
       state.players[state.players.length - 1]?.id ||
       ''
     );
@@ -83,23 +85,16 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     if (!code || !savedId) return;
     let cancelled = false;
     setLoading(true);
-    joinGameRoom(code, getSavedPlayerName())
+    getGameRoomState(code)
       .then((state) => {
         if (cancelled) return;
-        const player = state.players.find(p => p.id === savedId);
-        if (!player) {
+        const player = state?.players.find(p => p.id === savedId);
+        if (!state || !player) {
           localStorage.removeItem('void_empires_active_game');
           return;
         }
-        setCurrentCode(code);
-        setGameState(state);
-        setMyPlayerId(player.id);
-        if (state.status === 'playing') {
-          onGameStart(code, player.id);
-        } else {
-          setView('waiting');
-          subscribeLobby(code, player.id);
-        }
+        // Do not force rejoin anymore. Show a small resume card and let the player choose.
+        setResumePrompt({ code, state, playerId: player.id });
       })
       .catch(() => {
         localStorage.removeItem('void_empires_active_game');
@@ -149,7 +144,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
   };
 
   const handleJoinState = (code: string, state: GameState) => {
-    const myId = findMyPlayerId(state, playerName);
+    const myId = findMyPlayerId(state);
     setCurrentCode(code);
     setGameState(state);
     setMyPlayerId(myId);
@@ -293,7 +288,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
       actionLog: [...gameState.actionLog, 'Game started by creator! Good luck commanders!'],
       turnStartedAt: new Date().toISOString(),
       lastAction: 'start_game',
-      lastActionAt: new Date().toISOString()
+      lastActionAt: new Date().toISOString(),
+      activeCombatNodeId: null,
+      activeCombatSummary: undefined
     };
 
     setGameState(updatedState);
@@ -308,15 +305,42 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleLeaveLobby = () => {
+  const handleLeaveLobby = async () => {
     audio.playBeep();
     if (subscription) {
       subscription.unsubscribe();
       setSubscription(null);
     }
+    if (currentCode && myPlayerId && gameState?.status === 'lobby') {
+      await leaveGameRoom(currentCode, myPlayerId);
+    }
     setView('welcome');
     setGameState(null);
     setCurrentCode('');
+    setMyPlayerId('');
+  };
+
+  const handleResumeGame = () => {
+    if (!resumePrompt) return;
+    audio.playBeep(700, 0.06);
+    setResumePrompt(null);
+    if (resumePrompt.state.status === 'playing') {
+      onGameStart(resumePrompt.code, resumePrompt.playerId);
+    } else {
+      setCurrentCode(resumePrompt.code);
+      setGameState(resumePrompt.state);
+      setMyPlayerId(resumePrompt.playerId);
+      setView('waiting');
+      subscribeLobby(resumePrompt.code, resumePrompt.playerId);
+    }
+  };
+
+  const handleDismissResume = async () => {
+    if (!resumePrompt) return;
+    audio.playBeep(220, 0.06);
+    await leaveGameRoom(resumePrompt.code, resumePrompt.playerId);
+    localStorage.removeItem('void_empires_active_game');
+    setResumePrompt(null);
   };
 
   const playerColorHex = {
@@ -341,6 +365,20 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         <span>Settings</span>
         <span className={`inline-block w-2 h-2 rounded-full ml-1 ${dbMode === 'supabase' ? 'bg-blue-400 animate-pulse' : 'bg-emerald-400'}`} />
       </button>
+
+      {view === 'welcome' && resumePrompt && (
+        <div className="fixed right-4 top-1/2 -translate-y-1/2 z-20 w-64 bg-slate-950/95 border border-cyan-500/40 rounded-lg shadow-2xl p-4 space-y-3 animate-fadeIn">
+          <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-400">Saved Game Found</div>
+          <div className="text-sm font-bold text-white">Room {resumePrompt.code}</div>
+          <div className="text-xs text-slate-400">
+            {resumePrompt.state.status === 'playing' ? 'You were in an active game.' : 'You were waiting in this lobby.'}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={handleResumeGame} className="min-h-[44px] scifi-btn scifi-btn-primary text-xs">Rejoin</button>
+            <button onClick={handleDismissResume} className="min-h-[44px] scifi-btn text-xs hover:text-white">No</button>
+          </div>
+        </div>
+      )}
 
       <div className={`w-full ${containerWidth} z-10`}>
         <div className="text-center mb-8">

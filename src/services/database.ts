@@ -6,6 +6,7 @@ const ROOMS_LIST_KEY = 'void_empires_rooms_list';
 const PLAYER_ID_KEY = 'void_empires_player_id';
 const PLAYER_NAME_KEY = 'void_empires_player_name';
 const ACTIVE_GAME_KEY = 'void_empires_active_game';
+const PUBLIC_LOBBY_TTL_MS = 1000 * 60 * 60 * 6; // hide abandoned public lobbies after 6 hours
 const getRoomKey = (code: string) => `void_empires_room_${code.toUpperCase()}`;
 const localChannel = new BroadcastChannel('void_empires_local_sync');
 
@@ -106,13 +107,17 @@ function makeInitialState(
     actionLog: [`Room created by ${creator.name}`],
     winnerId: null,
     chat: [],
+    alliances: [],
     lastUpdated: now,
     lastAction: 'create_lobby',
-    lastActionAt: now
+    lastActionAt: now,
+    activeCombatNodeId: null
   };
 }
 
 function summarizePublicGame(code: string, state: GameState, updatedAt?: string): PublicGameSummary | null {
+  const stamp = updatedAt || state.lastUpdated || state.lastActionAt;
+  if (stamp && Date.now() - new Date(stamp).getTime() > PUBLIC_LOBBY_TTL_MS) return null;
   if (state.status !== 'lobby') return null;
   if (state.isPublic === false) return null;
   if (state.players.length >= state.maxPlayers) return null;
@@ -124,7 +129,7 @@ function summarizePublicGame(code: string, state: GameState, updatedAt?: string)
     mapSize: state.mapSize,
     npcCount: state.npcCount,
     isPublic: true,
-    updatedAt: updatedAt || state.lastUpdated || new Date().toISOString()
+    updatedAt: stamp || new Date().toISOString()
   };
 }
 
@@ -227,6 +232,78 @@ export async function createGameRoom(
     }
   }
   return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount, isPublic);
+}
+
+
+export async function getGameRoomState(code: string): Promise<GameState | null> {
+  const cleanCode = code.trim().toUpperCase();
+  if (getDbMode() === 'supabase') {
+    const client = getSupabaseClient();
+    if (client) {
+      const { data, error } = await client.from('games').select('state').eq('id', cleanCode).maybeSingle();
+      if (error || !data) return null;
+      return data.state as GameState;
+    }
+  }
+  const data = localStorage.getItem(getRoomKey(cleanCode));
+  return data ? JSON.parse(data) as GameState : null;
+}
+
+export async function leaveGameRoom(code: string, playerId: string): Promise<void> {
+  const cleanCode = code.trim().toUpperCase();
+  const state = await getGameRoomState(cleanCode);
+  if (!state) {
+    localStorage.removeItem(ACTIVE_GAME_KEY);
+    return;
+  }
+
+  // Only remove players from lobbies. Active games stay intact so players can resume manually.
+  if (state.status !== 'lobby') {
+    localStorage.removeItem(ACTIVE_GAME_KEY);
+    return;
+  }
+
+  const leaving = state.players.find(p => p.id === playerId);
+  const remaining = state.players.filter(p => p.id !== playerId);
+
+  if (remaining.length === 0) {
+    if (getDbMode() === 'supabase') {
+      const client = getSupabaseClient();
+      if (client) {
+        await client.from('players').delete().eq('game_id', cleanCode);
+        await client.from('games').delete().eq('id', cleanCode);
+      }
+    } else {
+      localStorage.removeItem(getRoomKey(cleanCode));
+      const rooms = JSON.parse(localStorage.getItem(ROOMS_LIST_KEY) || '[]') as string[];
+      localStorage.setItem(ROOMS_LIST_KEY, JSON.stringify(rooms.filter(r => r !== cleanCode)));
+      localChannel.postMessage({ type: 'UPDATE', code: cleanCode, state: null });
+    }
+    localStorage.removeItem(ACTIVE_GAME_KEY);
+    return;
+  }
+
+  const updatedState: GameState = {
+    ...state,
+    players: remaining.map((p, idx) => ({ ...p, playerNumber: idx + 1, color: colorForSlot(idx) })),
+    creatorId: state.creatorId === playerId ? remaining[0].id : state.creatorId,
+    maxPlayers: Math.max(state.maxPlayers, remaining.length) as GameState['maxPlayers'],
+    actionLog: [...state.actionLog, `${leaving?.name || 'A commander'} left the lobby.`],
+    lastAction: 'leave_lobby',
+    lastActionAt: new Date().toISOString(),
+    lastUpdated: new Date().toISOString()
+  };
+
+  if (getDbMode() === 'supabase') {
+    const client = getSupabaseClient();
+    if (client) {
+      await client.from('games').update({ state: updatedState, updated_at: updatedState.lastUpdated, status: 'lobby' }).eq('id', cleanCode);
+      await client.from('players').delete().eq('game_id', cleanCode).eq('display_name', leaving?.name || '');
+    }
+  } else {
+    localDb.updateGameState(cleanCode, updatedState);
+  }
+  localStorage.removeItem(ACTIVE_GAME_KEY);
 }
 
 export async function joinGameRoom(code: string, playerName: string): Promise<GameState> {
