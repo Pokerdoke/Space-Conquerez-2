@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Lobby } from './components/Lobby';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Map } from './components/Map';
@@ -7,7 +7,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { SoundToggle } from './components/SoundToggle';
 import { DiplomacyPanel } from './components/DiplomacyPanel';
 import type { GameState, StarNode, Ship } from './types';
-import { subscribeToRoom, updateRoomState, getDbMode } from './services/database';
+import { subscribeToRoom, updateRoomState, getDbMode, getGameRoomState } from './services/database';
 import type { DbMode } from './services/database';
 import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration } from './services/gameLogic';
 import { audio } from './services/audio';
@@ -32,6 +32,7 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDiplomacyOpen, setIsDiplomacyOpen] = useState(false);
   const [dbMode, setDbMode] = useState<DbMode>(() => getDbMode());
+  const roomUnsubRef = useRef<(() => void) | null>(null);
 
   // Fog of war setting
   const [fogOfWar, setFogOfWar] = useState(true);
@@ -61,14 +62,15 @@ export const App: React.FC = () => {
   const handleSettingsChanged = () => setDbMode(getDbMode());
 
   // Connect to the game room
-  const handleGameStart = (code: string, playerId: string) => {
-    setCurrentCode(code);
-    setMyPlayerId(playerId);
-    localStorage.setItem('void_empires_active_game', code);
-    localStorage.setItem('void_empires_player_id', playerId);
-    setView('game');
+  const handleGameStart = async (code: string, playerId: string) => {
+    const cleanCode = code.trim().toUpperCase();
 
-    const unsub = subscribeToRoom(code, (newState) => {
+    if (roomUnsubRef.current) {
+      roomUnsubRef.current();
+      roomUnsubRef.current = null;
+    }
+
+    const applyIncomingState = (newState: GameState) => {
       setGameState(newState);
       refreshSelectionsFromState(newState);
       const winner = checkWinCondition(newState);
@@ -80,12 +82,42 @@ export const App: React.FC = () => {
           actionLog: [...newState.actionLog, `VICTORY! Commander ${winner.name} dominates the sector.`]
         };
         setGameState(winState);
-        updateRoomState(code, winState);
+        updateRoomState(cleanCode, winState);
         audio.playVictory();
       }
-    });
-    return () => unsub();
+    };
+
+    setCurrentCode(cleanCode);
+    setMyPlayerId(playerId);
+    setSelectedNode(null);
+    setSelectedShip(null);
+    setReachableNodes({});
+    localStorage.setItem('void_empires_active_game', cleanCode);
+    localStorage.setItem('void_empires_player_id', playerId);
+
+    const currentState = await getGameRoomState(cleanCode);
+    const playerStillExists = currentState?.players.some((p) => p.id === playerId);
+    if (!currentState || !playerStillExists) {
+      localStorage.removeItem('void_empires_active_game');
+      setGameState(null);
+      setView('lobby');
+      return;
+    }
+
+    applyIncomingState(currentState);
+    setView('game');
+
+    roomUnsubRef.current = subscribeToRoom(cleanCode, applyIncomingState);
   };
+
+  useEffect(() => {
+    return () => {
+      if (roomUnsubRef.current) {
+        roomUnsubRef.current();
+        roomUnsubRef.current = null;
+      }
+    };
+  }, []);
 
   // Update reachable nodes when ship is selected
   useEffect(() => {

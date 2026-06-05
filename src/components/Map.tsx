@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
@@ -76,23 +76,23 @@ function getBiomePalette(biome: PlanetBiome) {
   }
 }
 
-const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
+const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = ({ panX, panY, scale }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const starsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
   const parallaxStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
 
   if (starsRef.current.length === 0) {
-    starsRef.current = Array.from({ length: 420 }, () => ({
+    starsRef.current = Array.from({ length: 460 }, () => ({
       x: Math.random(),
       y: Math.random(),
-      r: 0.45 + Math.random() * 1.15,
-      o: 0.28 + Math.random() * 0.6,
+      r: 0.45 + Math.random() * 1.2,
+      o: 0.28 + Math.random() * 0.62,
     }));
-    parallaxStarsRef.current = Array.from({ length: 85 }, () => ({
+    parallaxStarsRef.current = Array.from({ length: 90 }, () => ({
       x: Math.random(),
       y: Math.random(),
-      r: 0.8 + Math.random() * 1.35,
-      o: 0.22 + Math.random() * 0.38,
+      r: 0.9 + Math.random() * 1.35,
+      o: 0.24 + Math.random() * 0.38,
     }));
   }
 
@@ -113,9 +113,8 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
       height: number,
       offsetX: number,
       offsetY: number,
-      opacityMul = 1
+      opacityMul = 1,
     ) => {
-      // Draw as a tiled field, so no visible "reset" happens when panning across the center.
       for (const star of dots) {
         const baseX = star.x * width;
         const baseY = star.y * height;
@@ -128,28 +127,26 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
       }
     };
 
-    const drawHexGrid = (width: number, height: number, offsetX: number, offsetY: number) => {
+    const drawHexGrid = (width: number, height: number, worldOffsetX: number, worldOffsetY: number) => {
       ctx.save();
-      ctx.globalAlpha = 0.16;
-      ctx.strokeStyle = '#315f9a';
-      ctx.lineWidth = 0.75;
+      const radius = 62;
+      const horiz = Math.sqrt(3) * radius;
+      const vert = radius * 1.5;
+      const startX = -((((worldOffsetX * 0.1) % horiz) + horiz) % horiz) - horiz * 2;
+      const startY = -((((worldOffsetY * 0.1) % vert) + vert) % vert) - vert * 2;
 
-      const radius = 58;
-      const w = Math.sqrt(3) * radius;
-      const verticalStep = radius * 1.5;
-      const horizontalStep = w;
-      const xOffset = ((offsetX * 0.08) % horizontalStep + horizontalStep) % horizontalStep;
-      const yOffset = ((offsetY * 0.08) % verticalStep + verticalStep) % verticalStep;
-
-      for (let row = -2; row < height / verticalStep + 3; row++) {
-        for (let col = -2; col < width / horizontalStep + 3; col++) {
-          const cx = col * horizontalStep + (row % 2 ? horizontalStep / 2 : 0) - xOffset;
-          const cy = row * verticalStep - yOffset;
+      ctx.strokeStyle = '#285d95';
+      ctx.globalAlpha = 0.2;
+      ctx.lineWidth = 0.9;
+      for (let row = -2; row < height / vert + 4; row++) {
+        for (let col = -2; col < width / horiz + 4; col++) {
+          const cx = startX + col * horiz + (row % 2 ? horiz / 2 : 0);
+          const cy = startY + row * vert;
           ctx.beginPath();
           for (let i = 0; i < 6; i++) {
-            const angle = Math.PI / 6 + (Math.PI / 3) * i; // flat-ish sci-fi hexes like the reference
-            const x = cx + Math.cos(angle) * radius;
-            const y = cy + Math.sin(angle) * radius;
+            const a = Math.PI / 6 + (Math.PI / 3) * i;
+            const x = cx + Math.cos(a) * radius;
+            const y = cy + Math.sin(a) * radius;
             if (i === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
           }
@@ -158,16 +155,36 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
         }
       }
 
-      // Very faint diagonal pass adds the layered tactical-screen look without touching the UI.
-      ctx.globalAlpha = 0.045;
-      ctx.strokeStyle = '#6aa7ff';
-      for (let x = -height; x < width + height; x += 120) {
-        ctx.beginPath();
-        ctx.moveTo(x - offsetX * 0.04, 0);
-        ctx.lineTo(x + height - offsetX * 0.04, height);
-        ctx.stroke();
+      ctx.strokeStyle = '#69a6ff';
+      ctx.globalAlpha = 0.08;
+      ctx.lineWidth = 0.55;
+      for (let row = -2; row < height / vert + 4; row++) {
+        for (let col = -2; col < width / horiz + 4; col++) {
+          const cx = startX + col * horiz + (row % 2 ? horiz / 2 : 0);
+          const cy = startY + row * vert;
+          ctx.beginPath();
+          for (let i = 0; i < 6; i++) {
+            const a = Math.PI / 6 + (Math.PI / 3) * i;
+            const x = cx + Math.cos(a) * (radius - 10);
+            const y = cy + Math.sin(a) * (radius - 10);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
       }
 
+      ctx.fillStyle = 'rgba(142, 197, 255, 0.10)';
+      for (let row = -2; row < height / vert + 4; row++) {
+        for (let col = -2; col < width / horiz + 4; col++) {
+          const cx = startX + col * horiz + (row % 2 ? horiz / 2 : 0);
+          const cy = startY + row * vert;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 1.35, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
       ctx.restore();
     };
 
@@ -186,35 +203,36 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
       ctx.clearRect(0, 0, width, height);
 
       const bg = ctx.createLinearGradient(0, 0, width, height);
-      bg.addColorStop(0, '#06102b');
-      bg.addColorStop(0.42, '#0b1234');
-      bg.addColorStop(1, '#03131e');
+      bg.addColorStop(0, '#051027');
+      bg.addColorStop(0.4, '#091432');
+      bg.addColorStop(1, '#03111e');
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
-      // Continuous parallax: no modulo for nebula centers, so the background cannot pop/reset.
-      const px = panX * 0.03;
-      const py = panY * 0.03;
+      // Derive world offset from the viewport center so zooming does not visibly shift the backdrop.
+      const worldCenterX = (width * 0.5 - panX) / scale;
+      const worldCenterY = (height * 0.5 - panY) / scale;
+      const px = worldCenterX * 0.18;
+      const py = worldCenterY * 0.18;
+
       const nebulaCenters = [
-        { x: width * 0.18 + px, y: height * 0.35 + py * 0.6, r: Math.max(width, height) * 0.55, c: 'rgba(65, 90, 210, 0.18)' },
-        { x: width * 0.62 - px * 0.65, y: height * 0.42 + py * 0.35, r: Math.max(width, height) * 0.48, c: 'rgba(47, 205, 210, 0.11)' },
-        { x: width * 0.42 + px * 0.4, y: height * 0.75 - py * 0.45, r: Math.max(width, height) * 0.62, c: 'rgba(105, 75, 230, 0.16)' },
+        { x: width * 0.16 + px * 0.35, y: height * 0.34 + py * 0.22, r: Math.max(width, height) * 0.54, c: 'rgba(64, 92, 212, 0.18)' },
+        { x: width * 0.66 - px * 0.26, y: height * 0.42 + py * 0.16, r: Math.max(width, height) * 0.48, c: 'rgba(52, 176, 204, 0.11)' },
+        { x: width * 0.44 + px * 0.18, y: height * 0.76 - py * 0.2, r: Math.max(width, height) * 0.62, c: 'rgba(110, 76, 228, 0.16)' },
       ];
 
       nebulaCenters.forEach(({ x, y, r, c }) => {
         const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
         grad.addColorStop(0, c);
-        grad.addColorStop(0.55, c.replace(/0\.\d+\)/, '0.055)'));
+        grad.addColorStop(0.56, c.replace(/0\.\d+\)/, '0.055)'));
         grad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.fillRect(x - r, y - r, r * 2, r * 2);
       });
 
-      drawHexGrid(width, height, panX, panY);
-
-      // Deep field stays static; the closer layer moves slowly and wraps seamlessly.
+      drawHexGrid(width, height, worldCenterX, worldCenterY);
       drawWrappedDots(starsRef.current, width, height, 0, 0, 1);
-      drawWrappedDots(parallaxStarsRef.current, width, height, panX * 0.12, panY * 0.12, 0.9);
+      drawWrappedDots(parallaxStarsRef.current, width, height, px * 0.28, py * 0.28, 0.95);
     };
 
     const scheduleDraw = () => {
@@ -232,7 +250,7 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }
       resizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleDraw);
     };
-  }, [panX, panY]);
+  }, [panX, panY, scale]);
 
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" />;
 };
@@ -461,7 +479,7 @@ const PlanetBody: React.FC<{
         </>
       )}
 
-      <ellipse cx="2" cy={radius * 1.08} rx={radius * 1.35} ry={radius * 0.52} fill="rgba(0,0,0,0.46)" opacity="0.9" />
+      <ellipse cx="2" cy={radius * 1.08} rx={radius * 1.35} ry={radius * 0.52} fill="rgba(0,0,0,0.56)" opacity="0.95" />
 
       <g clipPath={`url(#${clipId})`} filter="url(#planet-shadow)">
         <circle r={radius} fill={`url(#${gradientId})`} />
@@ -584,16 +602,15 @@ export const Map: React.FC<MapProps> = ({
   const centerX = 500;
   const centerY = 500;
 
-  const visibleNodes = useMemo(() => gameState.nodes.filter(isNodeVisible), [gameState.nodes, fogOfWarEnabled, myPlayerId, selectedNode, selectedShip]);
 
   return (
     <div className="relative h-full w-full overflow-hidden border border-slate-900 bg-slate-950 touch-none">
-      <GalaxyBackdrop panX={panX} panY={panY} />
+      <GalaxyBackdrop panX={panX} panY={panY} scale={scale} />
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <defs>
           <filter id="planet-shadow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0" dy="8" stdDeviation="5" floodColor="#000000" floodOpacity="0.55" />
+            <feDropShadow dx="0" dy="10" stdDeviation="7" floodColor="#000000" floodOpacity="0.62" />
           </filter>
           <filter id="ship-shadow" x="-90%" y="-90%" width="280%" height="280%">
             <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" floodColor="#000000" floodOpacity="0.9" />
@@ -604,18 +621,6 @@ export const Map: React.FC<MapProps> = ({
           </filter>
         </defs>
         <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
-          {/* Controlled space overlay */}
-          {visibleNodes.map((node) => {
-            if (!node.claimedBy) return null;
-            const color = getPlayerColorHex(node.claimedBy);
-            return (
-              <g key={`territory-${node.id}`} pointerEvents="none">
-                <circle cx={node.x} cy={node.y} r={96} fill={color} opacity="0.045" />
-                <circle cx={node.x} cy={node.y} r={62} fill={color} opacity="0.028" />
-              </g>
-            );
-          })}
-
           {/* Grid rings retained from original map style */}
           {Array.from({ length: ringsCount }).map((_, idx) => {
             const radius = ((idx + 1) / ringsCount) * maxRadius;
@@ -770,6 +775,66 @@ export const Map: React.FC<MapProps> = ({
                 >
                   {node.name}
                 </text>
+              </g>
+            );
+          })}
+
+          {/* Stellaris-like territory overlay above planets */}
+          {gameState.players.map((player) => {
+            const ownedNodes = gameState.nodes.filter((node) => isNodeVisible(node) && node.claimedBy === player.id);
+            if (ownedNodes.length === 0) return null;
+            const color = PLAYER_COLORS[player.color];
+            const ownedIds = new Set(ownedNodes.map((n) => n.id));
+            return (
+              <g key={`territory-layer-${player.id}`} pointerEvents="none">
+                {ownedNodes.map((node) => (
+                  <g key={`territory-node-${node.id}`}>
+                    <circle cx={node.x} cy={node.y} r={34} fill={color} opacity="0.08" />
+                    <circle cx={node.x} cy={node.y} r={34} fill="none" stroke={color} strokeWidth="1.6" opacity="0.46" />
+                  </g>
+                ))}
+                {ownedNodes.flatMap((node) =>
+                  node.links
+                    .filter((linkId) => ownedIds.has(linkId) && node.id < linkId)
+                    .map((linkId) => {
+                      const targetNode = gameState.nodes.find((n) => n.id === linkId);
+                      if (!targetNode) return null;
+                      return (
+                        <g key={`territory-link-${player.id}-${node.id}-${linkId}`}>
+                          <line
+                            x1={node.x}
+                            y1={node.y}
+                            x2={targetNode.x}
+                            y2={targetNode.y}
+                            stroke={color}
+                            strokeWidth="46"
+                            strokeLinecap="round"
+                            opacity="0.06"
+                          />
+                          <line
+                            x1={node.x}
+                            y1={node.y}
+                            x2={targetNode.x}
+                            y2={targetNode.y}
+                            stroke={color}
+                            strokeWidth="6"
+                            strokeLinecap="round"
+                            opacity="0.22"
+                          />
+                          <line
+                            x1={node.x}
+                            y1={node.y}
+                            x2={targetNode.x}
+                            y2={targetNode.y}
+                            stroke={color}
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                            opacity="0.5"
+                          />
+                        </g>
+                      );
+                    })
+                )}
               </g>
             );
           })}
