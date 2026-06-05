@@ -83,12 +83,12 @@ const groundShadeMap: Record<string, string> = {
 };
 
 const developmentRadius: Record<PlanetDevelopment, number> = {
-  none: 18,
-  colony: 24,
-  city: 32,
-  metropolis: 42,
-  arcology: 48,
-  coreworld: 54,
+  none: 16,
+  colony: 17,
+  city: 18,
+  metropolis: 19,
+  arcology: 20,
+  coreworld: 21,
 };
 
 const hashString = (value: string) => {
@@ -118,13 +118,13 @@ const getPlanetVisual = (node: StarNode): PlanetVisual => {
 };
 
 const getPlanetRadius = (node: StarNode) => {
-  if (node.isDysonSphere) return 38;
+  if (node.isDysonSphere) return 23;
   return developmentRadius[node.development] ?? 18;
 };
 
 // ─── Layered Canvas Galaxy Background ─────────────────────────────────────
 
-const GalaxyBackground: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
+const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ parallaxX, parallaxY }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const staticCanvas = useRef<HTMLCanvasElement | null>(null);
   const parallaxCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -202,8 +202,8 @@ const GalaxyBackground: React.FC<{ panX: number; panY: number }> = ({ panX, panY
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.width, size.height);
 
-    const px = panX * 0.3;
-    const py = panY * 0.3;
+    const px = parallaxX * 0.3;
+    const py = parallaxY * 0.3;
 
     const drawNebula = (x: number, y: number, radius: number, inner: string, outer: string) => {
       const grad = ctx.createRadialGradient(x + px, y + py, 0, x + px, y + py, radius);
@@ -256,7 +256,7 @@ const GalaxyBackground: React.FC<{ panX: number; panY: number }> = ({ panX, panY
         });
       }
     }
-  }, [nearStars, panX, panY, size.width, size.height]);
+  }, [nearStars, parallaxX, parallaxY, size.width, size.height]);
 
   return (
     <div ref={wrapRef} className="galaxy-background" aria-hidden="true">
@@ -275,41 +275,81 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
   size = 10,
 }) => {
   const s = size;
+  const line = '#dbeafe';
+  const dark = '#020617';
+  const engine = '#67e8f9';
+
   switch (type) {
     case 'Destroyer':
       return (
-        <g fill={color} stroke={color} strokeWidth="0.3" opacity="0.96" filter="url(#ship-soft-glow)">
-          <polygon points={`0,${-s} ${s * 0.35},${s * 0.5} 0,${s * 0.2} ${-s * 0.35},${s * 0.5}`} />
-          <line x1="0" y1={-s} x2="0" y2={s * 0.2} strokeWidth="0.5" stroke="#fff" opacity="0.45" />
+        <g filter="url(#ship-soft-glow)" opacity="0.98">
+          <path
+            d={`M0 ${-s * 1.05} L${s * 0.38} ${-s * 0.2} L${s * 0.72} ${s * 0.52} L${s * 0.18} ${s * 0.2} L0 ${s * 0.68} L${-s * 0.18} ${s * 0.2} L${-s * 0.72} ${s * 0.52} L${-s * 0.38} ${-s * 0.2} Z`}
+            fill={color}
+            stroke={line}
+            strokeWidth="0.45"
+          />
+          <path d={`M0 ${-s * 0.86} L0 ${s * 0.48}`} stroke={dark} strokeWidth="0.45" opacity="0.55" />
+          <path d={`M${-s * 0.34} ${-s * 0.12} L${s * 0.34} ${-s * 0.12}`} stroke={line} strokeWidth="0.35" opacity="0.65" />
+          <circle cx={-s * 0.18} cy={s * 0.42} r={s * 0.09} fill={engine} />
+          <circle cx={s * 0.18} cy={s * 0.42} r={s * 0.09} fill={engine} />
         </g>
       );
     case 'BattleShip':
       return (
-        <g fill={color} stroke={color} strokeWidth="0.3" opacity="0.96" filter="url(#ship-soft-glow)">
-          <polygon points={`0,${-s} ${s * 0.6},${s * 0.6} ${s * 0.15},${s * 0.2} ${-s * 0.15},${s * 0.2} ${-s * 0.6},${s * 0.6}`} />
-          <rect x={-s * 0.08} y={-s * 0.5} width={s * 0.16} height={s * 0.6} fill="#fff" opacity="0.25" rx="1" />
+        <g filter="url(#ship-soft-glow)" opacity="0.98">
+          <path
+            d={`M0 ${-s * 1.15} L${s * 0.92} ${s * 0.42} L${s * 0.28} ${s * 0.26} L${s * 0.18} ${s * 0.74} L${-s * 0.18} ${s * 0.74} L${-s * 0.28} ${s * 0.26} L${-s * 0.92} ${s * 0.42} Z`}
+            fill={color}
+            stroke={line}
+            strokeWidth="0.42"
+          />
+          <path d={`M${-s * 0.26} ${-s * 0.46} H${s * 0.26} L${s * 0.16} ${s * 0.18} H${-s * 0.16} Z`} fill={dark} opacity="0.34" />
+          <rect x={-s * 0.08} y={-s * 0.68} width={s * 0.16} height={s * 0.76} rx="0.6" fill={line} opacity="0.38" />
+          <circle cx={-s * 0.38} cy={s * 0.08} r={s * 0.08} fill={line} opacity="0.7" />
+          <circle cx={s * 0.38} cy={s * 0.08} r={s * 0.08} fill={line} opacity="0.7" />
+          <circle cx={-s * 0.12} cy={s * 0.58} r={s * 0.08} fill={engine} />
+          <circle cx={s * 0.12} cy={s * 0.58} r={s * 0.08} fill={engine} />
         </g>
       );
     case 'Carrier':
       return (
-        <g fill={color} stroke={color} strokeWidth="0.3" opacity="0.96" filter="url(#ship-soft-glow)">
-          <rect x={-s * 0.55} y={-s * 0.4} width={s * 1.1} height={s * 0.8} rx={s * 0.1} />
-          <polygon points={`${-s * 0.55},${-s * 0.4} 0,${-s * 0.8} ${s * 0.55},${-s * 0.4}`} />
-          <line x1={-s * 0.35} y1="0" x2={s * 0.35} y2="0" stroke="#fff" strokeWidth="0.6" opacity="0.45" />
+        <g filter="url(#ship-soft-glow)" opacity="0.98">
+          <path
+            d={`M${-s * 0.72} ${-s * 0.62} L${s * 0.72} ${-s * 0.62} L${s * 0.62} ${s * 0.55} L${s * 0.2} ${s * 0.86} L${-s * 0.2} ${s * 0.86} L${-s * 0.62} ${s * 0.55} Z`}
+            fill={color}
+            stroke={line}
+            strokeWidth="0.42"
+          />
+          <path d={`M0 ${-s * 0.88} L${s * 0.5} ${-s * 0.62} H${-s * 0.5} Z`} fill={color} stroke={line} strokeWidth="0.35" />
+          <rect x={-s * 0.42} y={-s * 0.28} width={s * 0.84} height={s * 0.16} rx="0.5" fill={dark} opacity="0.42" />
+          <rect x={-s * 0.1} y={-s * 0.52} width={s * 0.2} height={s * 0.98} rx="0.6" fill={line} opacity="0.28" />
+          <circle cx={-s * 0.34} cy={s * 0.62} r={s * 0.09} fill={engine} />
+          <circle cx={s * 0.34} cy={s * 0.62} r={s * 0.09} fill={engine} />
         </g>
       );
     case 'ColonyShip':
       return (
-        <g fill={color} stroke={color} strokeWidth="0.3" opacity="0.9" filter="url(#ship-soft-glow)">
-          <circle r={s * 0.45} fill={color} />
-          <polygon points={`${-s * 0.2},${s * 0.45} 0,${s * 0.85} ${s * 0.2},${s * 0.45}`} />
-          <circle r={s * 0.2} fill="#fff" opacity="0.22" />
+        <g filter="url(#ship-soft-glow)" opacity="0.96">
+          <path d={`M0 ${-s * 0.82} L${s * 0.25} ${-s * 0.08} L${s * 0.16} ${s * 0.66} H${-s * 0.16} L${-s * 0.25} ${-s * 0.08} Z`} fill={color} stroke={line} strokeWidth="0.38" />
+          <circle r={s * 0.38} fill="none" stroke={line} strokeWidth="0.45" opacity="0.7" />
+          <circle r={s * 0.18} fill={dark} opacity="0.45" />
+          <rect x={-s * 0.52} y={-s * 0.05} width={s * 0.28} height={s * 0.1} rx="0.2" fill={color} stroke={line} strokeWidth="0.22" />
+          <rect x={s * 0.24} y={-s * 0.05} width={s * 0.28} height={s * 0.1} rx="0.2" fill={color} stroke={line} strokeWidth="0.22" />
+          <circle cx="0" cy={s * 0.58} r={s * 0.08} fill={engine} />
         </g>
       );
     case 'Fighter':
       return (
-        <g fill={color} stroke={color} strokeWidth="0.2" opacity="0.95" filter="url(#ship-soft-glow)">
-          <polygon points={`0,${-s * 0.7} ${s * 0.25},${s * 0.5} 0,${s * 0.1} ${-s * 0.25},${s * 0.5}`} />
+        <g filter="url(#ship-soft-glow)" opacity="0.97">
+          <path
+            d={`M0 ${-s * 0.95} L${s * 0.28} ${s * 0.42} L${s * 0.1} ${s * 0.2} H${-s * 0.1} L${-s * 0.28} ${s * 0.42} Z`}
+            fill={color}
+            stroke={line}
+            strokeWidth="0.32"
+          />
+          <path d={`M0 ${-s * 0.62} L0 ${s * 0.22}`} stroke={dark} strokeWidth="0.36" opacity="0.55" />
+          <circle cx="0" cy={s * 0.38} r={s * 0.07} fill={engine} />
         </g>
       );
     default:
@@ -393,9 +433,9 @@ const PlanetSurface: React.FC<{ node: StarNode; radius: number; gradientId: stri
     return (
       <g>
         <circle r={radius} fill="url(#dyson-gradient)" stroke="#fde68a" strokeWidth="2" filter="url(#dyson-glow)" />
-        <circle r={radius * 0.44} fill="#fff7ed" opacity="0.95" className="animate-dyson-core" />
-        <circle r={radius * 0.72} fill="none" stroke="#facc15" strokeWidth="1" strokeDasharray="7 4" className="animate-slow-spin" />
-        <circle r={radius * 0.96} fill="none" stroke="#fb923c" strokeWidth="1" strokeDasharray="2 6" className="animate-reverse-spin" />
+        <circle r={radius * 0.44} fill="#fff7ed" opacity="0.95"  />
+        <circle r={radius * 0.72} fill="none" stroke="#facc15" strokeWidth="1" strokeDasharray="7 4"  />
+        <circle r={radius * 0.96} fill="none" stroke="#fb923c" strokeWidth="1" strokeDasharray="2 6"  />
       </g>
     );
   }
@@ -489,12 +529,14 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
   });
 
   const display = groups.slice(0, 8);
-  const orbitRadius = planetRadius + 22;
+  const orbitRadius = planetRadius + 14;
   const angleStep = (2 * Math.PI) / Math.max(display.length, 1);
 
   return (
     <>
       <circle r={orbitRadius} fill="none" stroke="rgba(148, 163, 184, 0.14)" strokeDasharray="2 7" strokeWidth="1" pointerEvents="none" />
+      <g pointerEvents="none">
+        <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="5s" repeatCount="indefinite" />
       {display.map((group, i) => {
         const angle = i * angleStep - Math.PI / 2;
         const cx = Math.cos(angle) * orbitRadius;
@@ -503,12 +545,12 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
         const color = player ? playerColors[player.color] : '#94a3b8';
         return (
           <g key={`${group.type}-${group.owner}-${i}`} transform={`translate(${cx}, ${cy})`} pointerEvents="none">
-            <circle r="9" fill="rgba(2, 6, 23, 0.78)" stroke={color} strokeWidth="0.6" opacity="0.8" />
-            <ShipIcon type={group.type} color={color} size={7} />
+            <circle r="7.5" fill="rgba(2, 6, 23, 0.78)" stroke={color} strokeWidth="0.55" opacity="0.82" />
+            <ShipIcon type={group.type} color={color} size={5.8} />
             {group.count > 1 && (
               <>
-                <circle cx="6" cy="-6" r="4" fill="#020617" stroke={color} strokeWidth="0.8" />
-                <text x="6" y="-3.4" textAnchor="middle" fill={color} fontSize="4.8" fontWeight="bold" fontFamily="Orbitron, monospace">
+                <circle cx="5" cy="-5" r="3.4" fill="#020617" stroke={color} strokeWidth="0.8" />
+                <text x="5" y="-2.7" textAnchor="middle" fill={color} fontSize="4.2" fontWeight="bold" fontFamily="Orbitron, monospace">
                   {group.count}
                 </text>
               </>
@@ -516,6 +558,7 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
           </g>
         );
       })}
+      </g>
     </>
   );
 };
@@ -532,7 +575,7 @@ export const Map: React.FC<MapProps> = ({
   onMoveShip,
   fogOfWarEnabled,
 }) => {
-  const { panX, panY, scale, handlers, reset } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
+  const { panX, panY, scale, parallaxX, parallaxY, handlers, reset, svgRef } = usePanZoom(0.3, 2.5, 50, 50, 0.7, 500, 500);
 
   const getPlayerColorHex = (claimedBy: string | null) => {
     if (!claimedBy) return '#475569';
@@ -603,9 +646,9 @@ export const Map: React.FC<MapProps> = ({
   });
 
   return (
-    <div className="relative w-full h-full overflow-hidden touch-none border border-cyan-950/60 bg-slate-950 map-shell">
-      <GalaxyBackground panX={panX} panY={panY} />
-      <svg className="relative z-[1] w-full h-full cursor-grab active:cursor-grabbing select-none map-svg" {...handlers}>
+    <div className="absolute inset-0 w-full h-full overflow-hidden touch-none border border-cyan-950/60 bg-slate-950 map-shell">
+      <GalaxyBackground parallaxX={parallaxX} parallaxY={parallaxY} />
+      <svg ref={svgRef} className="relative z-[1] w-full h-full cursor-grab active:cursor-grabbing select-none map-svg" {...handlers}>
         <defs>
           <linearGradient id="lane-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#0e7490" stopOpacity="0.18" />
@@ -685,7 +728,7 @@ export const Map: React.FC<MapProps> = ({
             strokeWidth="1.2"
             opacity="0.14"
             pointerEvents="none"
-            className="origin-[500px_500px] animate-radar-sweep"
+            className="origin-[500px_500px]"
           />
 
           {/* Hyperlanes */}
@@ -724,7 +767,7 @@ export const Map: React.FC<MapProps> = ({
                     strokeDasharray="8 34"
                     opacity={isSelectedPath ? 0.92 : 0.5}
                     strokeLinecap="round"
-                    className="animate-lane-flow"
+                    
                   />
                 </g>
               );
@@ -771,7 +814,7 @@ export const Map: React.FC<MapProps> = ({
                 {node.claimedBy && (
                   <>
                     <circle r={planetR + 8} fill="none" stroke={nodeColor} strokeWidth="1.4" opacity="0.68" filter="url(#reticle-glow)" />
-                    <circle r={planetR + 13} fill="none" stroke={nodeColor} strokeWidth="0.9" strokeDasharray="5 8" opacity="0.35" className="animate-slow-spin" />
+                    <circle r={planetR + 13} fill="none" stroke={nodeColor} strokeWidth="0.9" strokeDasharray="5 8" opacity="0.35" />
                   </>
                 )}
 
@@ -782,7 +825,6 @@ export const Map: React.FC<MapProps> = ({
                     stroke="#facc15"
                     strokeWidth="2"
                     strokeDasharray="4 6"
-                    className="animate-slow-spin"
                     filter="url(#reticle-glow)"
                   />
                 )}
@@ -799,7 +841,7 @@ export const Map: React.FC<MapProps> = ({
                 )}
 
                 {node.hasGateway && (
-                  <circle r={planetR + 17} fill="none" stroke="#a78bfa" strokeWidth="1.4" strokeDasharray="10 5" className="animate-slow-spin" />
+                  <circle r={planetR + 17} fill="none" stroke="#a78bfa" strokeWidth="1.4" strokeDasharray="10 5" />
                 )}
                 {node.hasShipyard && (
                   <circle r={planetR + 12} fill="none" stroke="#22d3ee" strokeWidth="1.4" strokeDasharray="2 4" opacity="0.9" />

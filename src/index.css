@@ -252,7 +252,7 @@ button[class*="emerald"]:not(:disabled):active {
     0 18px 44px rgba(0, 0, 0, 0.42),
     0 0 22px rgba(34, 211, 238, 0.06);
   backdrop-filter: blur(16px) saturate(1.15);
-  animation: holoMaterialize 200ms ease-out both;
+  animation: none;
 }
 
 .glass-panel::before,
@@ -283,7 +283,7 @@ button[class*="emerald"]:not(:disabled):active {
   pointer-events: none;
   z-index: 1;
   background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.16), transparent);
-  animation: scanlineSweep 200ms ease-out both;
+  display: none;
 }
 
 .glass-panel > *,
@@ -317,7 +317,7 @@ h3 {
 .stat-flicker,
 header span.font-bold,
 header .font-mono {
-  animation: digitalFlicker 300ms ease-out both;
+  animation: none;
 }
 
 .system-name-label {
@@ -332,7 +332,7 @@ header .font-mono {
 }
 
 .star-system-node:hover .planet-sphere {
-  transform: scale(1.07);
+  transform: none;
 }
 
 .targeting-reticle {
@@ -364,7 +364,7 @@ header .font-mono {
 }
 
 .animate-lane-flow {
-  animation: laneFlow 1.9s linear infinite;
+  animation: none;
 }
 
 @keyframes slowSpin {

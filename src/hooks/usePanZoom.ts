@@ -1,9 +1,12 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useLayoutEffect } from 'react';
 
 interface PanZoomState {
   panX: number;
   panY: number;
   scale: number;
+  /** Background parallax follows manual panning only, not wheel/pinch zoom corrections. */
+  parallaxX: number;
+  parallaxY: number;
 }
 
 export function usePanZoom(
@@ -11,20 +14,56 @@ export function usePanZoom(
   maxScale = 3.0,
   initialPanX = 0,
   initialPanY = 0,
-  initialScale = 0.8
+  initialScale = 0.8,
+  centerWorldX?: number,
+  centerWorldY?: number
 ) {
   const [state, setState] = useState<PanZoomState>({
     panX: initialPanX,
     panY: initialPanY,
-    scale: initialScale
+    scale: initialScale,
+    parallaxX: initialPanX,
+    parallaxY: initialPanY
   });
 
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const hasAutoCentered = useRef(false);
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
+
+  const getCenteredState = useCallback((scaleValue = initialScale): PanZoomState => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (rect && centerWorldX !== undefined && centerWorldY !== undefined) {
+      const panX = rect.width / 2 - centerWorldX * scaleValue;
+      const panY = rect.height / 2 - centerWorldY * scaleValue;
+      return {
+        panX,
+        panY,
+        scale: scaleValue,
+        parallaxX: panX,
+        parallaxY: panY
+      };
+    }
+    return {
+      panX: initialPanX,
+      panY: initialPanY,
+      scale: scaleValue,
+      parallaxX: initialPanX,
+      parallaxY: initialPanY
+    };
+  }, [centerWorldX, centerWorldY, initialPanX, initialPanY, initialScale]);
+
+  useLayoutEffect(() => {
+    if (hasAutoCentered.current || centerWorldX === undefined || centerWorldY === undefined) return;
+    const frame = window.requestAnimationFrame(() => {
+      hasAutoCentered.current = true;
+      setState(getCenteredState(initialScale));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [centerWorldX, centerWorldY, getCenteredState, initialScale]);
 
   // Mouse wheel zoom toward cursor
   const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
@@ -39,6 +78,7 @@ export function usePanZoom(
       const worldX = (cx - prev.panX) / prev.scale;
       const worldY = (cy - prev.panY) / prev.scale;
       return {
+        ...prev,
         panX: cx - worldX * newScale,
         panY: cy - worldY * newScale,
         scale: Number(newScale.toFixed(3))
@@ -87,7 +127,9 @@ export function usePanZoom(
     setState(prev => ({
       ...prev,
       panX: panStart.current.x + dx,
-      panY: panStart.current.y + dy
+      panY: panStart.current.y + dy,
+      parallaxX: panStart.current.x + dx,
+      parallaxY: panStart.current.y + dy
     }));
   }, []);
 
@@ -117,6 +159,7 @@ export function usePanZoom(
         const worldX = (mid.x - prev.panX) / prev.scale;
         const worldY = (mid.y - prev.panY) / prev.scale;
         return {
+          ...prev,
           panX: mid.x - worldX * newScale,
           panY: mid.y - worldY * newScale,
           scale: Number(newScale.toFixed(3))
@@ -131,8 +174,8 @@ export function usePanZoom(
   }, []);
 
   const reset = useCallback(() => {
-    setState({ panX: initialPanX, panY: initialPanY, scale: initialScale });
-  }, [initialPanX, initialPanY, initialScale]);
+    setState(getCenteredState(initialScale));
+  }, [getCenteredState, initialScale]);
 
   return {
     ...state,
