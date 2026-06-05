@@ -30,6 +30,10 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
   // Collapse/Expand state for drawer on mobile
   const [isExpanded, setIsExpanded] = useState(true);
 
+  // Always render the latest version of the selected node from gameState.
+  // This prevents build/development/troop UI from staying stale until the user clicks away and back.
+  const currentNode = gameState.nodes.find(n => n.id === node.id) || node;
+
   const getPlayerName = (ownerId: string | null) => {
     if (!ownerId) return 'Neutral/Unclaimed';
     return gameState.players.find(p => p.id === ownerId)?.name || 'Unknown';
@@ -47,7 +51,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
     return mappings[color];
   };
 
-  const isDysonSphere = node.isDysonSphere;
+  const isDysonSphere = currentNode.isDysonSphere;
 
   return (
     <div className={`fixed bottom-0 left-0 right-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-t border-slate-800 backdrop-blur-md shadow-[0_-5px_30px_rgba(0,0,0,0.5)] glass-panel ${
@@ -66,7 +70,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
           <div className="text-left">
             <h3 className="text-base font-bold uppercase tracking-wider text-slate-100 flex items-center">
-              {node.name}
+              {currentNode.name}
               {isDysonSphere && (
                 <span className="ml-2 text-[9px] font-extrabold bg-amber-500/20 text-amber-400 border border-amber-500/40 px-1 py-0.5 rounded animate-pulse">
                   DYSON SPHERE
@@ -74,17 +78,17 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
               )}
             </h3>
             <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
-              Owner: <span className={`font-bold ${getPlayerColorHex(node.claimedBy)}`}>{getPlayerName(node.claimedBy)}</span> | 
-              Dev: <span className="capitalize text-indigo-400 font-semibold">{node.development}</span> | 
-              Gen: <span className="text-emerald-400 font-bold font-mono">{node.resourceGeneration}R/turn</span>
+              Owner: <span className={`font-bold ${getPlayerColorHex(currentNode.claimedBy)}`}>{getPlayerName(currentNode.claimedBy)}</span> | 
+              Dev: <span className="capitalize text-indigo-400 font-semibold">{currentNode.development}</span> | 
+              Gen: <span className="text-emerald-400 font-bold font-mono">{currentNode.resourceGeneration}R/turn</span>
             </span>
           </div>
           
           {/* Active Structure Badges */}
           <div className="flex space-x-1 items-center">
-            {node.hasShipyard && <span title="Shipyard Present"><Anchor className="h-3.5 w-3.5 text-cyan-400" /></span>}
-            {node.hasFtlInhibitor && <span title="FTL Inhibitor Present"><Shield className="h-3.5 w-3.5 text-red-400" /></span>}
-            {node.hasGateway && <span title="Hyper-gateway Present"><Orbit className="h-3.5 w-3.5 text-purple-400" /></span>}
+            {currentNode.hasShipyard && <span title="Shipyard Present"><Anchor className="h-3.5 w-3.5 text-cyan-400" /></span>}
+            {currentNode.hasFtlInhibitor && <span title="FTL Inhibitor Present"><Shield className="h-3.5 w-3.5 text-red-400" /></span>}
+            {currentNode.hasGateway && <span title="Hyper-gateway Present"><Orbit className="h-3.5 w-3.5 text-purple-400" /></span>}
           </div>
         </div>
 
@@ -154,7 +158,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
           <div className="mt-2 flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 pb-28">
             {activeTab === 'build' && (
               <BuildPanel
-                node={node}
+                node={currentNode}
                 gameState={gameState}
                 myPlayerId={myPlayerId}
                 onUpdateState={onUpdateState}
@@ -163,7 +167,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
 
             {activeTab === 'fleet' && (
               <FleetPanel
-                node={node}
+                node={currentNode}
                 gameState={gameState}
                 myPlayerId={myPlayerId}
                 selectedShip={selectedShip}
@@ -174,7 +178,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
 
             {activeTab === 'combat' && (
               <CombatPanel
-                node={node}
+                node={currentNode}
                 gameState={gameState}
                 myPlayerId={myPlayerId}
                 onUpdateState={onUpdateState}

@@ -31,6 +31,21 @@ export const App: React.FC = () => {
   // Fog of war setting
   const [fogOfWar, setFogOfWar] = useState(true);
 
+  const refreshSelectionsFromState = (state: GameState) => {
+    setSelectedNode(prev => {
+      if (!prev) return prev;
+      return state.nodes.find(n => n.id === prev.id) || null;
+    });
+    setSelectedShip(prev => {
+      if (!prev) return prev;
+      for (const node of state.nodes) {
+        const freshShip = node.ships.find(s => s.id === prev.id);
+        if (freshShip) return freshShip;
+      }
+      return null;
+    });
+  };
+
   // Read URL query parameter for sharing link on load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -50,10 +65,7 @@ export const App: React.FC = () => {
 
     const unsub = subscribeToRoom(code, (newState) => {
       setGameState(newState);
-      if (selectedNode) {
-        const freshNode = newState.nodes.find(n => n.id === selectedNode.id);
-        if (freshNode) setSelectedNode(freshNode);
-      }
+      refreshSelectionsFromState(newState);
       const winner = checkWinCondition(newState);
       if (winner && newState.status !== 'completed') {
         const winState: GameState = {
@@ -127,6 +139,7 @@ export const App: React.FC = () => {
 
     setSelectedShip(null);
     setGameState(updatedState);
+    refreshSelectionsFromState(updatedState);
     await updateRoomState(currentCode, updatedState);
   };
 
@@ -187,6 +200,7 @@ export const App: React.FC = () => {
 
     setSelectedShip(null);
     setGameState(updatedState);
+    refreshSelectionsFromState(updatedState);
     await updateRoomState(currentCode, updatedState);
   };
 
@@ -239,6 +253,7 @@ export const App: React.FC = () => {
       lastActionAt: updatedState.lastActionAt || new Date().toISOString()
     };
     setGameState(stamped);
+    refreshSelectionsFromState(stamped);
     await updateRoomState(currentCode, stamped);
   };
 

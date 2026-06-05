@@ -617,6 +617,89 @@ export function unloadGroundUnitFromCarrier(
   return next;
 }
 
+export interface InvasionResult {
+  state: GameState;
+  report: string[];
+  captured: boolean;
+  startedGroundCombat: boolean;
+  failed?: boolean;
+}
+
+function canInvadeNode(node: StarNode, playerId: string): boolean {
+  return node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== playerId);
+}
+
+// Drops every ground unit from every friendly carrier over the selected enemy/NPC planet.
+// If no defenders are present, the planet is captured immediately. If defenders exist,
+// the deployed units remain on the surface and the combat panel resolves the ground battle.
+export function invadePlanetWithCarriers(
+  state: GameState,
+  nodeId: string,
+  playerId: string
+): InvasionResult {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) {
+    return { state, report: [], captured: false, startedGroundCombat: false };
+  }
+
+  const isActive = next.players[next.activePlayerIndex]?.id === playerId;
+  const enemyCombatShips = node.ships.some(s => s.owner !== playerId && s.blocksMovement);
+  const carriers = node.ships.filter(s => s.owner === playerId && s.type === 'Carrier' && s.carriedUnits.length > 0);
+  const totalTroops = carriers.reduce((sum, carrier) => sum + carrier.carriedUnits.length, 0);
+
+  if (!isActive || next.phase !== 2 || !canInvadeNode(node, playerId) || enemyCombatShips || totalTroops === 0) {
+    return { state, report: [], captured: false, startedGroundCombat: false };
+  }
+
+  const deployingById = new Map<string, GroundUnit>();
+  for (const carrier of carriers) {
+    for (const unit of carrier.carriedUnits) {
+      if (unit.owner === playerId && !deployingById.has(unit.id)) {
+        deployingById.set(unit.id, unit);
+      }
+    }
+  }
+  const deploying = Array.from(deployingById.values());
+  const deployingIds = new Set(deploying.map(g => g.id));
+  const defenderCountBeforeDeploy = node.groundUnits.filter(g => g.owner !== playerId).length;
+
+  // Atomic sync: remove every deployed unit from every carrier and add each unit once to the node.
+  // This also cleans up any older duplicate cargo references from previous saves.
+  for (const carrier of carriers) {
+    carrier.carriedUnits = [];
+    carrier.carriedFighters = [];
+  }
+  node.groundUnits = [
+    ...node.groundUnits.filter(g => !deployingIds.has(g.id)),
+    ...deploying
+  ];
+
+  const report = [
+    `${player.name}: Invaded ${node.name} with ${deploying.length} Ground Unit(s) from ${carriers.length} Carrier(s).`
+  ];
+  let captured = false;
+  let startedGroundCombat = false;
+
+  if (defenderCountBeforeDeploy === 0) {
+    node.claimedBy = playerId;
+    node.isNpcPlanet = false;
+    captured = true;
+    report.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
+  } else {
+    startedGroundCombat = true;
+    report.push(`Ground combat has begun on ${node.name}. Select one invading troop and one defending troop, then attack.`);
+  }
+
+  next.actionLog = [...next.actionLog, ...report];
+  next.lastAction = 'invade_planet';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return { state: next, report, captured, startedGroundCombat };
+}
+
+// Backwards-compatible single-carrier helper. The current UI uses invadePlanetWithCarriers.
 export function invadePlanetWithCarrier(
   state: GameState,
   nodeId: string,
@@ -624,41 +707,93 @@ export function invadePlanetWithCarrier(
   playerId: string
 ): GameState {
   const next = cloneGameState(state);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node) return state;
+  // Keep old call behavior by only allowing the named carrier to deploy.
+  const carrier = node.ships.find(s => s.id === carrierId && s.owner === playerId && s.type === 'Carrier');
+  if (!carrier || carrier.carriedUnits.length === 0) return state;
+  const otherCarrierCargo = node.ships
+    .filter(s => s.id !== carrierId && s.owner === playerId && s.type === 'Carrier')
+    .map(s => ({ ship: s, carriedUnits: [...s.carriedUnits] }));
+  for (const entry of otherCarrierCargo) entry.ship.carriedUnits = [];
+  const result = invadePlanetWithCarriers(next, nodeId, playerId).state;
+  const resultNode = result.nodes.find(n => n.id === nodeId);
+  if (resultNode) {
+    for (const entry of otherCarrierCargo) {
+      const resultShip = resultNode.ships.find(s => s.id === entry.ship.id);
+      if (resultShip) resultShip.carriedUnits = entry.carriedUnits;
+      resultNode.groundUnits = resultNode.groundUnits.filter(g => !entry.carriedUnits.some(u => u.id === g.id));
+    }
+  }
+  return result;
+}
+
+export interface GroundCombatRoundResult {
+  state: GameState;
+  report: string[];
+  attackerDmg: number;
+  defenderDmg: number;
+  attackerDestroyed: boolean;
+  defenderDestroyed: boolean;
+  captured: boolean;
+  failed: boolean;
+}
+
+export function resolveGroundCombatRound(
+  state: GameState,
+  nodeId: string,
+  attackerUnitId: string,
+  defenderUnitId: string,
+  playerId: string
+): GroundCombatRoundResult | null {
+  const next = cloneGameState(state);
   const player = next.players.find(p => p.id === playerId);
   const node = next.nodes.find(n => n.id === nodeId);
-  if (!node || !player) return state;
+  if (!node || !player) return null;
+
   const isActive = next.players[next.activePlayerIndex]?.id === playerId;
-  const isEnemyOrNpcPlanet = node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== playerId);
   const enemyCombatShips = node.ships.some(s => s.owner !== playerId && s.blocksMovement);
-  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
-  if (!isActive || next.phase !== 2 || !isEnemyOrNpcPlanet || enemyCombatShips || !carrier || carrier.carriedUnits.length === 0) {
-    return state;
-  }
+  if (!isActive || next.phase !== 2 || enemyCombatShips) return null;
 
-  const deploying = [...carrier.carriedUnits];
-  const deployingIds = new Set(deploying.map(g => g.id));
-  carrier.carriedUnits = [];
-  carrier.carriedFighters = [];
+  const attacker = node.groundUnits.find(g => g.id === attackerUnitId && g.owner === playerId);
+  const defender = node.groundUnits.find(g => g.id === defenderUnitId && g.owner !== playerId);
+  if (!attacker || !defender) return null;
 
-  // Remove stale duplicates from the surface first, then add each attacking troop once.
-  node.groundUnits = node.groundUnits.filter(g => !deployingIds.has(g.id));
-  const defendersBeforeDeploy = node.groundUnits.filter(g => g.owner !== playerId);
-  node.groundUnits = [...node.groundUnits, ...deploying];
+  const result = resolveGroundCombat(attacker, defender, node);
+  const remainingAttackers = node.groundUnits.filter(g => g.owner === playerId);
+  const remainingDefenders = node.groundUnits.filter(g => g.owner !== playerId);
+  const captured = remainingDefenders.length === 0 && remainingAttackers.length > 0;
+  const failed = remainingAttackers.length === 0 && !captured;
 
-  const logs = [`${player.name}: Launched planetary invasion at ${node.name} with ${deploying.length} Ground Unit(s).`];
-  if (defendersBeforeDeploy.length === 0) {
+  const report = [
+    `[GROUND COMBAT] ${node.name}: invading troop attacked defending garrison.`,
+    `- Invader dealt ${result.attackerDmg} damage${result.defenderDestroyed ? ' and destroyed the defender' : ` (defender HP: ${defender.hp}/${defender.maxHp})`}.`,
+    `- Defender dealt ${result.defenderDmg} damage${result.attackerDestroyed ? ' and destroyed the attacker' : ` (attacker HP: ${attacker.hp}/${attacker.maxHp})`}.`
+  ];
+
+  if (captured) {
     node.claimedBy = playerId;
     node.isNpcPlanet = false;
-    logs.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
-  } else {
-    logs.push(`Ground combat has begun on ${node.name}. Select attacker and defender units to resolve rounds.`);
+    report.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
+  } else if (failed) {
+    report.push(`Invasion failed. ${node.name} remains under its current control.`);
   }
 
-  next.actionLog = [...next.actionLog, ...logs];
-  next.lastAction = 'invade_planet';
+  next.actionLog = [...next.actionLog, ...report];
+  next.lastAction = captured ? 'planet_captured_ground_combat' : failed ? 'invasion_failed' : 'ground_combat_round';
   next.lastActionAt = currentTimestamp();
   next.lastUpdated = next.lastActionAt;
-  return next;
+
+  return {
+    state: next,
+    report,
+    attackerDmg: result.attackerDmg,
+    defenderDmg: result.defenderDmg,
+    attackerDestroyed: result.attackerDestroyed,
+    defenderDestroyed: result.defenderDestroyed,
+    captured,
+    failed
+  };
 }
 
 // Check Win Conditions

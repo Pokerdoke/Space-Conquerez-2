@@ -1,16 +1,18 @@
-import React from 'react';
-import type { GameState, StarNode } from '../types';
+import React, { useRef, useState } from 'react';
+import type { GameState, StarNode, Ship } from '../types';
 import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, PLANET_UPGRADES, createShip, createGroundUnit } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Shield, Star, Anchor } from 'lucide-react';
-
 
 interface BuildPanelProps {
   node: StarNode;
   gameState: GameState;
   myPlayerId: string;
-  onUpdateState: (newState: GameState) => void;
+  onUpdateState: (newState: GameState) => void | Promise<void>;
 }
+
+type StructureType = 'Shipyard' | 'FtlInhibitor' | 'Gateway';
+type BuildAction = 'upgrade' | StructureType | 'GroundUnit' | Ship['type'] | `deconstruct-${StructureType}`;
 
 export const BuildPanel: React.FC<BuildPanelProps> = ({
   node,
@@ -18,175 +20,226 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   myPlayerId,
   onUpdateState
 }) => {
+  const pendingRef = useRef(false);
+  const [busyAction, setBusyAction] = useState<BuildAction | null>(null);
+
+  // Always use the freshest node/player from the current game state. Without this, the UI could
+  // keep showing stale build counters/development until the player clicked another planet and back.
+  const currentNode = gameState.nodes.find(n => n.id === node.id) || node;
   const me = gameState.players.find(p => p.id === myPlayerId);
-  const isMyTurn = gameState.players[gameState.activePlayerIndex].id === myPlayerId;
+  const activePlayer = gameState.players[gameState.activePlayerIndex];
+  const isMyTurn = activePlayer?.id === myPlayerId;
   const isBuildPhase = gameState.phase === 0;
-  const isOwner = node.claimedBy === myPlayerId;
+  const isOwner = currentNode.claimedBy === myPlayerId;
+  const canBuild = Boolean(me && isMyTurn && isBuildPhase && isOwner);
+  const isBusy = busyAction !== null;
 
   if (!me) return null;
 
-  // Active validation checks
-  const canBuild = isMyTurn && isBuildPhase && isOwner;
+  const groundUnitsBuilt = currentNode.groundUnitsBuiltThisTurn ?? 0;
+  const maxGroundUnits = currentNode.development === 'metropolis' ? 6 : currentNode.development === 'city' ? 3 : 0;
+  const groundUnitsCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
+  const canBuildGroundUnit = canBuild && !isBusy && maxGroundUnits > 0 && !groundUnitsCapReached && me.resources >= GROUND_UNIT_STATS.cost;
 
-  const groundUnitsBuilt = node.groundUnitsBuiltThisTurn ?? 0;
-  const maxGroundUnits = node.development === 'metropolis' ? 6 : node.development === 'city' ? 3 : 0;
-  const groundUnitsCapReached = groundUnitsBuilt >= maxGroundUnits;
-
-  // Spend resources utility
-  const spendResources = (amount: number, logMsg: string, applyChanges: (n: StarNode) => void) => {
-    if (me.resources < amount) return;
-    audio.playBuild();
-
-    const updatedPlayers = gameState.players.map(p => {
-      if (p.id === myPlayerId) {
-        return { ...p, resources: p.resources - amount };
-      }
-      return p;
-    });
-
-    const updatedNodes = gameState.nodes.map(n => {
-      if (n.id === node.id) {
-        const copy = { ...n };
-        applyChanges(copy);
-        return copy;
-      }
-      return n;
-    });
-
-    const updatedState: GameState = {
-      ...gameState,
-      players: updatedPlayers,
-      nodes: updatedNodes,
-      actionLog: [...gameState.actionLog, `${me.name}: ${logMsg} (Turn ${gameState.turnNumber})`]
-    };
-
-    onUpdateState(updatedState);
+  const beginAction = (action: BuildAction) => {
+    if (pendingRef.current || !canBuild) return false;
+    pendingRef.current = true;
+    setBusyAction(action);
+    return true;
   };
 
-  // Build handlers
-  const handleUpgradePlanet = () => {
-    const currentDev = node.development;
-    const upgradeInfo = PLANET_UPGRADES[currentDev];
-    if (!upgradeInfo || !upgradeInfo.next) return;
-
-    spendResources(
-      upgradeInfo.cost,
-      `Upgraded ${node.name} to ${upgradeInfo.next.toUpperCase()}`,
-      (n) => {
-        n.development = upgradeInfo.next!;
-        n.resourceGeneration = PLANET_UPGRADES[upgradeInfo.next!].res;
-      }
-    );
+  const endAction = () => {
+    pendingRef.current = false;
+    setBusyAction(null);
   };
 
-  const handleBuildStructure = (struct: 'Shipyard' | 'FtlInhibitor' | 'Gateway') => {
-    const cost = STRUCTURE_COSTS[struct];
-    let desc = '';
-    let apply: (n: StarNode) => void;
+  const spendResources = async (
+    action: BuildAction,
+    amount: number,
+    logMsg: string,
+    applyChanges: (n: StarNode) => boolean | void
+  ) => {
+    if (!beginAction(action)) return;
 
-    if (struct === 'Shipyard') {
-      desc = `Built Shipyard on ${node.name}`;
-      apply = (n) => { n.hasShipyard = true; };
-    } else if (struct === 'FtlInhibitor') {
-      desc = `Built FTL Inhibitor on ${node.name}`;
-      apply = (n) => { n.hasFtlInhibitor = true; };
-    } else {
-      desc = `Built Jump Gateway on ${node.name}`;
-      apply = (n) => { n.hasGateway = true; };
+    try {
+      const latestPlayer = gameState.players.find(p => p.id === myPlayerId);
+      const latestActive = gameState.players[gameState.activePlayerIndex];
+      const latestNode = gameState.nodes.find(n => n.id === currentNode.id);
+      const stillCanBuild = latestPlayer && latestActive?.id === myPlayerId && gameState.phase === 0 && latestNode?.claimedBy === myPlayerId;
+      if (!latestPlayer || !latestNode || !stillCanBuild || latestPlayer.resources < amount) return;
+
+      const updatedNodes = gameState.nodes.map(n => {
+        if (n.id !== latestNode.id) return n;
+        const copy: StarNode = {
+          ...n,
+          ships: [...n.ships],
+          groundUnits: [...n.groundUnits]
+        };
+        const applied = applyChanges(copy);
+        return applied === false ? n : copy;
+      });
+
+      const didChange = updatedNodes.some((n, idx) => n !== gameState.nodes[idx]);
+      if (!didChange) return;
+
+      audio.playBuild();
+      const updatedPlayers = gameState.players.map(p =>
+        p.id === myPlayerId ? { ...p, resources: p.resources - amount } : p
+      );
+
+      const timestamp = new Date().toISOString();
+      const updatedState: GameState = {
+        ...gameState,
+        players: updatedPlayers,
+        nodes: updatedNodes,
+        actionLog: [...gameState.actionLog, `${latestPlayer.name}: ${logMsg} (Turn ${gameState.turnNumber})`],
+        lastAction: `build_${String(action).toLowerCase()}`,
+        lastActionAt: timestamp,
+        lastUpdated: timestamp
+      };
+
+      await onUpdateState(updatedState);
+    } finally {
+      endAction();
     }
-
-    spendResources(cost, desc, apply);
   };
 
-  const handleDeconstructStructure = (struct: 'Shipyard' | 'FtlInhibitor' | 'Gateway') => {
-    if (!me || !canBuild) return;
-    const refund = Math.floor(STRUCTURE_COSTS[struct] / 2);
+  const handleUpgradePlanet = async () => {
+    const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
+    const upgradeInfo = PLANET_UPGRADES[latestNode.development];
+    if (!upgradeInfo?.next) return;
+    const nextDev = upgradeInfo.next;
+    const cost = PLANET_UPGRADES[nextDev].cost;
+
+    await spendResources('upgrade', cost, `Upgraded ${latestNode.name} to ${nextDev.toUpperCase()}`, (n) => {
+      if (n.development !== latestNode.development) return false;
+      n.development = nextDev;
+      n.resourceGeneration = PLANET_UPGRADES[nextDev].res;
+    });
+  };
+
+  const handleBuildStructure = async (struct: StructureType) => {
+    const cost = STRUCTURE_COSTS[struct];
     const desc =
       struct === 'Shipyard'
-        ? `Deconstructed Shipyard on ${node.name} (+${refund}R)`
+        ? `Built Shipyard on ${currentNode.name}`
         : struct === 'FtlInhibitor'
-        ? `Deconstructed FTL Inhibitor on ${node.name} (+${refund}R)`
-        : `Deconstructed Gateway on ${node.name} (+${refund}R)`;
+          ? `Built FTL Inhibitor on ${currentNode.name}`
+          : `Built Jump Gateway on ${currentNode.name}`;
 
-    audio.playBuild();
-    const updatedPlayers = gameState.players.map(p =>
-      p.id === myPlayerId ? { ...p, resources: p.resources + refund } : p
-    );
-    const updatedNodes = gameState.nodes.map(n => {
-      if (n.id !== node.id) return n;
-      const copy = { ...n };
-      if (struct === 'Shipyard') copy.hasShipyard = false;
-      else if (struct === 'FtlInhibitor') copy.hasFtlInhibitor = false;
-      else copy.hasGateway = false;
-      return copy;
-    });
-    onUpdateState({
-      ...gameState,
-      players: updatedPlayers,
-      nodes: updatedNodes,
-      actionLog: [...gameState.actionLog, `${me.name}: ${desc} (Turn ${gameState.turnNumber})`]
+    await spendResources(struct, cost, desc, (n) => {
+      if (struct === 'Shipyard') {
+        if (n.hasShipyard) return false;
+        n.hasShipyard = true;
+      } else if (struct === 'FtlInhibitor') {
+        if (n.hasFtlInhibitor) return false;
+        n.hasFtlInhibitor = true;
+      } else {
+        if (n.hasGateway) return false;
+        n.hasGateway = true;
+      }
     });
   };
 
-  const handleBuildShip = (shipType: 'Destroyer' | 'BattleShip' | 'Carrier' | 'ColonyShip' | 'Fighter') => {
+  const handleDeconstructStructure = async (struct: StructureType) => {
+    if (!beginAction(`deconstruct-${struct}`)) return;
+    try {
+      const latestPlayer = gameState.players.find(p => p.id === myPlayerId);
+      const latestNode = gameState.nodes.find(n => n.id === currentNode.id);
+      if (!latestPlayer || !latestNode || !canBuild) return;
+
+      const hasStructure = struct === 'Shipyard' ? latestNode.hasShipyard : struct === 'FtlInhibitor' ? latestNode.hasFtlInhibitor : latestNode.hasGateway;
+      if (!hasStructure) return;
+
+      const refund = Math.floor(STRUCTURE_COSTS[struct] / 2);
+      const desc =
+        struct === 'Shipyard'
+          ? `Deconstructed Shipyard on ${latestNode.name} (+${refund}R)`
+          : struct === 'FtlInhibitor'
+            ? `Deconstructed FTL Inhibitor on ${latestNode.name} (+${refund}R)`
+            : `Deconstructed Gateway on ${latestNode.name} (+${refund}R)`;
+
+      audio.playBuild();
+      const updatedPlayers = gameState.players.map(p =>
+        p.id === myPlayerId ? { ...p, resources: p.resources + refund } : p
+      );
+      const updatedNodes = gameState.nodes.map(n => {
+        if (n.id !== latestNode.id) return n;
+        const copy = { ...n };
+        if (struct === 'Shipyard') copy.hasShipyard = false;
+        else if (struct === 'FtlInhibitor') copy.hasFtlInhibitor = false;
+        else copy.hasGateway = false;
+        return copy;
+      });
+      const timestamp = new Date().toISOString();
+      await onUpdateState({
+        ...gameState,
+        players: updatedPlayers,
+        nodes: updatedNodes,
+        actionLog: [...gameState.actionLog, `${latestPlayer.name}: ${desc} (Turn ${gameState.turnNumber})`],
+        lastAction: `deconstruct_${struct.toLowerCase()}`,
+        lastActionAt: timestamp,
+        lastUpdated: timestamp
+      });
+    } finally {
+      endAction();
+    }
+  };
+
+  const handleBuildShip = async (shipType: Ship['type']) => {
     const cost = SHIP_STATS[shipType].cost;
-    spendResources(
-      cost,
-      `Built ${shipType} at ${node.name}`,
-      (n) => {
-        n.ships.push(createShip(shipType, myPlayerId));
-      }
-    );
+    await spendResources(shipType, cost, `Built ${shipType} at ${currentNode.name}`, (n) => {
+      if (!n.hasShipyard) return false;
+      n.ships.push(createShip(shipType, myPlayerId));
+    });
   };
 
-  const handleBuildGroundUnit = () => {
-    const cost = GROUND_UNIT_STATS.cost;
-    spendResources(
-      cost,
-      `Built Ground Unit at ${node.name}`,
-      (n) => {
-        n.groundUnits.push(createGroundUnit(myPlayerId));
-        n.groundUnitsBuiltThisTurn = (n.groundUnitsBuiltThisTurn ?? 0) + 1;
-      }
-    );
+  const handleBuildGroundUnit = async () => {
+    const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
+    const latestMax = latestNode.development === 'metropolis' ? 6 : latestNode.development === 'city' ? 3 : 0;
+    const latestBuilt = latestNode.groundUnitsBuiltThisTurn ?? 0;
+    if (latestMax <= 0 || latestBuilt >= latestMax) return;
+
+    await spendResources('GroundUnit', GROUND_UNIT_STATS.cost, `Built Ground Unit at ${latestNode.name}`, (n) => {
+      const nodeMax = n.development === 'metropolis' ? 6 : n.development === 'city' ? 3 : 0;
+      const built = n.groundUnitsBuiltThisTurn ?? 0;
+      if (nodeMax <= 0 || built >= nodeMax) return false;
+      n.groundUnits.push(createGroundUnit(myPlayerId));
+      n.groundUnitsBuiltThisTurn = built + 1;
+    });
   };
 
-  const upgradeInfo = PLANET_UPGRADES[node.development];
+  const upgradeInfo = PLANET_UPGRADES[currentNode.development];
   const nextDev = upgradeInfo?.next;
   const upgradeCost = nextDev ? PLANET_UPGRADES[nextDev].cost : 0;
 
   return (
     <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
-      
       {!canBuild && (
         <div className="text-center text-xs text-slate-500 py-4 bg-slate-950/40 border border-slate-900 rounded font-mono">
-          {!isMyTurn 
-            ? 'Build options disabled: Not your active turn' 
-            : !isBuildPhase 
-              ? 'Build options disabled: Must be in BUILD phase' 
+          {!isMyTurn
+            ? 'Build options disabled: Not your active turn'
+            : !isBuildPhase
+              ? 'Build options disabled: Must be in BUILD phase'
               : 'Build options disabled: System not owned by your Empire'}
         </div>
       )}
 
       {canBuild && (
         <div className="space-y-4">
-          
-          {/* Planet Upgrades & Structures */}
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
               Planet Infrastructure
             </span>
             <div className="grid grid-cols-2 gap-2">
-              
-              {/* Upgrade Planet */}
               {nextDev ? (
                 <button
                   onClick={handleUpgradePlanet}
-                  disabled={me.resources < upgradeCost}
+                  disabled={isBusy || me.resources < upgradeCost}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-indigo-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
-                    <span className="block text-xs font-bold text-slate-300">Upgrade Planet</span>
+                    <span className="block text-xs font-bold text-slate-300">{busyAction === 'upgrade' ? 'Upgrading...' : 'Upgrade Planet'}</span>
                     <span className="text-[9px] text-slate-500 font-mono capitalize">to {nextDev} (+{PLANET_UPGRADES[nextDev].res} res/turn)</span>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
@@ -199,20 +252,17 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 </div>
               )}
 
-              {/* Build / Deconstruct Shipyard */}
-              {!node.hasShipyard ? (
+              {!currentNode.hasShipyard ? (
                 <button
                   onClick={() => handleBuildStructure('Shipyard')}
-                  disabled={me.resources < STRUCTURE_COSTS.Shipyard}
+                  disabled={isBusy || me.resources < STRUCTURE_COSTS.Shipyard}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-cyan-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
                     <span className="block text-xs font-bold text-slate-300">Build Shipyard</span>
                     <span className="text-[9px] text-slate-500 font-mono">Allows ship construction</span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
-                    {STRUCTURE_COSTS.Shipyard}R
-                  </span>
+                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.Shipyard}R</span>
                 </button>
               ) : (
                 <div className="flex flex-col space-y-1">
@@ -222,27 +272,25 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Shipyard')}
-                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 transition-all"
+                    disabled={isBusy}
+                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Shipyard / 2)}R)</span>
                   </button>
                 </div>
               )}
 
-              {/* Build / Deconstruct FTL Inhibitor */}
-              {!node.hasFtlInhibitor ? (
+              {!currentNode.hasFtlInhibitor ? (
                 <button
                   onClick={() => handleBuildStructure('FtlInhibitor')}
-                  disabled={me.resources < STRUCTURE_COSTS.FtlInhibitor}
+                  disabled={isBusy || me.resources < STRUCTURE_COSTS.FtlInhibitor}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-red-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
                     <span className="block text-xs font-bold text-slate-300">FTL Inhibitor</span>
                     <span className="text-[9px] text-slate-500 font-mono">Blocks enemy ships transit</span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
-                    {STRUCTURE_COSTS.FtlInhibitor}R
-                  </span>
+                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.FtlInhibitor}R</span>
                 </button>
               ) : (
                 <div className="flex flex-col space-y-1">
@@ -252,27 +300,25 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('FtlInhibitor')}
-                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 transition-all"
+                    disabled={isBusy}
+                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.FtlInhibitor / 2)}R)</span>
                   </button>
                 </div>
               )}
 
-              {/* Build / Deconstruct Gateway */}
-              {!node.hasGateway ? (
+              {!currentNode.hasGateway ? (
                 <button
                   onClick={() => handleBuildStructure('Gateway')}
-                  disabled={me.resources < STRUCTURE_COSTS.Gateway}
+                  disabled={isBusy || me.resources < STRUCTURE_COSTS.Gateway}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-purple-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
                     <span className="block text-xs font-bold text-slate-300">Jump Gateway</span>
                     <span className="text-[9px] text-slate-500 font-mono">Enables instant teleportation</span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
-                    {STRUCTURE_COSTS.Gateway}R
-                  </span>
+                  <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.Gateway}R</span>
                 </button>
               ) : (
                 <div className="flex flex-col space-y-1">
@@ -282,86 +328,72 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Gateway')}
-                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 transition-all"
+                    disabled={isBusy}
+                    className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Gateway / 2)}R)</span>
                   </button>
                 </div>
               )}
-
             </div>
           </div>
 
-          {/* Ground Unit constructions */}
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
               <span>Ground Barracks</span>
-              {node.development !== 'city' && node.development !== 'metropolis' ? (
+              {maxGroundUnits <= 0 ? (
                 <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
               ) : (
-                <span className="text-slate-500 lowercase font-normal">
+                <span className={`${groundUnitsCapReached ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>
                   Built: {groundUnitsBuilt}/{maxGroundUnits}
                 </span>
               )}
             </span>
-            
+
             <button
-              disabled={
-                (node.development !== 'city' && node.development !== 'metropolis') ||
-                groundUnitsCapReached ||
-                me.resources < GROUND_UNIT_STATS.cost
-              }
+              disabled={!canBuildGroundUnit}
               onClick={handleBuildGroundUnit}
               className="w-full flex items-center justify-between p-3 border border-slate-800 bg-slate-950/40 rounded hover:border-amber-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
             >
               <div>
-                <span className="block text-xs font-semibold text-slate-300">Build Ground Unit ({GROUND_UNIT_STATS.cost}R)</span>
+                <span className="block text-xs font-semibold text-slate-300">
+                  {busyAction === 'GroundUnit' ? 'Building Ground Unit...' : `Build Ground Unit (${GROUND_UNIT_STATS.cost}R)`}
+                </span>
                 <span className="text-[9px] text-slate-500 font-mono block">
                   HP:{GROUND_UNIT_STATS.hp} | DMG:{GROUND_UNIT_STATS.dmgMin}-{GROUND_UNIT_STATS.dmgMax}
                 </span>
               </div>
-              <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-2.5 py-1 rounded">
-                {GROUND_UNIT_STATS.cost}R
-              </span>
+              <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-2.5 py-1 rounded">{GROUND_UNIT_STATS.cost}R</span>
             </button>
           </div>
 
-          {/* Shipyard constructions */}
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
               <span>Orbital Dockyards</span>
-              {!node.hasShipyard && <span className="text-red-400 lowercase font-normal italic">Requires Shipyard</span>}
+              {!currentNode.hasShipyard && <span className="text-red-400 lowercase font-normal italic">Requires Shipyard</span>}
             </span>
             <div className="grid grid-cols-2 gap-2">
               {(Object.keys(SHIP_STATS) as Array<keyof typeof SHIP_STATS>).map((type) => {
                 const s = SHIP_STATS[type];
-                const satisfiesShipyard = node.hasShipyard;
+                const satisfiesShipyard = currentNode.hasShipyard;
                 const canAfford = me.resources >= s.cost;
-                
                 return (
                   <button
                     key={type}
-                    disabled={!satisfiesShipyard || !canAfford}
+                    disabled={isBusy || !satisfiesShipyard || !canAfford}
                     onClick={() => handleBuildShip(type)}
                     className="flex items-center justify-between p-2 border border-slate-800 bg-slate-950/40 rounded hover:border-cyan-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
                   >
                     <div>
-                      <span className="block text-xs font-semibold text-slate-300">{type}</span>
-                      <span className="text-[8px] text-slate-500 font-mono block">
-                        HP:{s.hp} | DMG:{s.dmgMin}-{s.dmgMax}
-                      </span>
+                      <span className="block text-xs font-semibold text-slate-300">{busyAction === type ? 'Building...' : type}</span>
+                      <span className="text-[8px] text-slate-500 font-mono block">HP:{s.hp} | DMG:{s.dmgMin}-{s.dmgMax}</span>
                     </div>
-                    <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-1.5 py-0.5 rounded">
-                      {s.cost}R
-                    </span>
+                    <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-1.5 py-0.5 rounded">{s.cost}R</span>
                   </button>
                 );
               })}
             </div>
           </div>
-
-
-
         </div>
       )}
     </div>
