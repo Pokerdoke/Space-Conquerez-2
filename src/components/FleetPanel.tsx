@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { GameState, StarNode, Ship, GroundUnit } from '../types';
 import { audio } from '../services/audio';
 import { Navigation, PackageOpen, Plus, Minus, Shield } from 'lucide-react';
-import { loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, MAX_FRIENDLY_GROUND_UNITS_ON_PLANET, countFriendlyGroundUnits } from '../services/gameLogic';
+import { loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
 
 interface FleetPanelProps {
   node: StarNode;
@@ -121,7 +121,8 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   const friendlyCarriers = node.ships.filter(s => s.type === 'Carrier' && s.owner === myPlayerId);
   const friendlyFighters = node.ships.filter(s => s.type === 'Fighter' && s.owner === myPlayerId);
   const friendlySurfaceCount = countFriendlyGroundUnits(node, myPlayerId);
-  const surfaceFull = friendlySurfaceCount >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+  const groundUnitCapacity = getGroundUnitCapacity(node.development);
+  const surfaceFull = friendlySurfaceCount >= groundUnitCapacity;
   const canManageTroops = isMyTurn && isMovePhase && isFriendlyNode;
 
   return (
@@ -380,7 +381,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
 
       <div>
         <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
-          Ground Units on Surface ({node.groundUnits.length}) — Friendly {friendlySurfaceCount}/{MAX_FRIENDLY_GROUND_UNITS_ON_PLANET}
+          Ground Units on Surface ({node.groundUnits.length}) — Friendly {friendlySurfaceCount}/{groundUnitCapacity}
         </span>
 
         {node.groundUnits.length === 0 ? (

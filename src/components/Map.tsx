@@ -321,16 +321,43 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
     );
   }
 
-  const iconScale: Record<string, number> = {
-    city: 0.84,
-    metropolis: 0.95,
-    arcology: 1.02,
-    coreworld: 1.08,
-  };
-  const scale = iconScale[development] ?? 0.9;
   const stroke = '#0ea5e9';
   const fill = 'rgba(190,242,100,0.86)';
   const shadow = 'rgba(2,6,23,0.48)';
+
+  if (development === 'arcology') {
+    return (
+      <g filter="url(#structure-shadow)" opacity="0.98">
+        <ellipse cx="0" cy="6.2" rx="11" ry="2.2" fill={shadow} />
+        <path d="M-10,5 A10,10 0 0,1 10,5" fill="rgba(190,242,100,0.34)" stroke="#67e8f9" strokeWidth="1.4" />
+        <path d="M-7,5 A7,7 0 0,1 7,5" fill="none" stroke="#bef264" strokeWidth="0.9" opacity="0.8" />
+        <rect x="-1.6" y="-7.5" width="3.2" height="12.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
+        <rect x="-6.5" y="-1.5" width="3.4" height="6.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
+        <rect x="3.1" y="-1.5" width="3.4" height="6.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
+        <circle cx="0" cy="-2" r="1.3" fill="#ffffff" opacity="0.55" />
+      </g>
+    );
+  }
+
+  if (development === 'coreworld') {
+    return (
+      <g filter="url(#structure-shadow)" opacity="0.99">
+        <ellipse cx="0" cy="6.5" rx="12" ry="2.4" fill={shadow} />
+        <path d="M-11,5.5 A11,11 0 0,1 11,5.5" fill="rgba(253,230,138,0.28)" stroke="#fde68a" strokeWidth="1.5" />
+        <path d="M-8,5.4 A8,8 0 0,1 8,5.4" fill="none" stroke="#38bdf8" strokeWidth="0.9" opacity="0.9" />
+        <path d="M0,-11 L3.4,-6.5 L3.4,5 L-3.4,5 L-3.4,-6.5 Z" fill="rgba(250,204,21,0.86)" stroke="#fde68a" strokeWidth="1" />
+        <rect x="-8.5" y="-1" width="3.3" height="6" rx="0.4" fill={fill} stroke={stroke} strokeWidth="0.9" />
+        <rect x="5.2" y="-1" width="3.3" height="6" rx="0.4" fill={fill} stroke={stroke} strokeWidth="0.9" />
+        <circle cx="0" cy="-4.5" r="1.4" fill="#ffffff" opacity="0.65" />
+      </g>
+    );
+  }
+
+  const iconScale: Record<string, number> = {
+    city: 0.84,
+    metropolis: 0.95,
+  };
+  const scale = iconScale[development] ?? 0.9;
 
   const buildings = {
     city: [
@@ -344,20 +371,6 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
       [-0.6, -9, 4.2, 15],
       [4.3, -4, 4, 10],
       [8.8, -2, 3, 8],
-    ],
-    arcology: [
-      [-10, -2, 3.5, 8],
-      [-6, -7, 4, 13],
-      [-1, -10, 5, 16],
-      [5, -6, 4, 12],
-      [9.5, -1, 3, 7],
-    ],
-    coreworld: [
-      [-10, -3, 3.5, 9],
-      [-6, -8, 4, 14],
-      [-1, -12, 5, 18],
-      [5, -7, 4, 13],
-      [9.5, -2, 3, 8],
     ],
   } as Record<string, number[][]>;
 
@@ -382,9 +395,6 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
           ))}
         </g>
       ))}
-      {development === 'coreworld' && (
-        <path d="M-1 -12 L1.5 -16 L4 -12" fill="none" stroke={stroke} strokeWidth="1.1" strokeLinejoin="round" />
-      )}
     </g>
   );
 };
@@ -619,6 +629,9 @@ export const Map: React.FC<MapProps> = ({
           <filter id="structure-shadow" x="-80%" y="-80%" width="260%" height="260%">
             <feDropShadow dx="0.7" dy="1.2" stdDeviation="0.9" floodColor="#000000" floodOpacity="0.75" />
           </filter>
+          <filter id="shipyard-glow" x="-80%" y="-80%" width="260%" height="260%">
+            <feDropShadow dx="0" dy="0" stdDeviation="2.6" floodColor="#67e8f9" floodOpacity="0.85" />
+          </filter>
         </defs>
         <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
           {/* Grid rings retained from original map style */}
@@ -835,6 +848,12 @@ export const Map: React.FC<MapProps> = ({
                       );
                     })
                 )}
+                {ownedNodes.filter((node) => node.hasShipyard).map((node) => (
+                  <g key={`territory-shipyard-${player.id}-${node.id}`} filter="url(#shipyard-glow)">
+                    <circle cx={node.x} cy={node.y} r={24} fill="none" stroke="#67e8f9" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.95" />
+                    <circle cx={node.x} cy={node.y} r={28} fill="none" stroke="#bae6fd" strokeWidth="0.8" opacity="0.55" />
+                  </g>
+                ))}
               </g>
             );
           })}

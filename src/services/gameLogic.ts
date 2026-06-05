@@ -80,6 +80,12 @@ export const PLANET_UPGRADES: Record<PlanetDevelopment, { cost: number; res: num
 
 export const MAX_FRIENDLY_GROUND_UNITS_ON_PLANET = 6;
 
+export function getGroundUnitCapacity(development: PlanetDevelopment): number {
+  if (development === 'coreworld') return 12;
+  if (development === 'arcology') return 9;
+  return MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+}
+
 export function getPlanetLevel(development: PlanetDevelopment): number {
   return PLANET_UPGRADES[development]?.level ?? 0;
 }
@@ -137,12 +143,14 @@ export function getPlanetResourceGeneration(development: PlanetDevelopment): num
 export function getEffectiveResourceGeneration(node: StarNode, ownerId: string): number {
   if (node.claimedBy !== ownerId) return 0;
   const friendlyTroops = node.groundUnits.filter(g => g.owner === ownerId).length;
-  // Overcrowded captured worlds still belong to you, but they produce no income until garrison <= 6.
-  if (friendlyTroops > MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return 0;
+  // Overcrowded captured worlds still belong to you, but they produce no income until the garrison is within capacity.
+  if (friendlyTroops > getGroundUnitCapacity(node.development)) return 0;
   return node.resourceGeneration;
 }
 
 export function getGroundUnitBuildLimit(development: PlanetDevelopment): number {
+  if (development === 'coreworld') return 12;
+  if (development === 'arcology') return 9;
   if (development === 'metropolis') return 6;
   if (development === 'city') return 3;
   return 0;
@@ -700,7 +708,7 @@ export function countFriendlyGroundUnits(node: StarNode, playerId: string): numb
 }
 
 export function canAddFriendlyGroundUnit(node: StarNode, playerId: string): boolean {
-  return countFriendlyGroundUnits(node, playerId) < MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+  return countFriendlyGroundUnits(node, playerId) < getGroundUnitCapacity(node.development);
 }
 
 
@@ -749,7 +757,7 @@ export function unloadGroundUnitFromCarrier(
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
   const unit = carrier?.carriedUnits.find(g => g.id === unitId);
   if (!carrier || !unit) return state;
-  if (countFriendlyGroundUnits(node, playerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET && !node.groundUnits.some(g => g.id === unitId)) return state;
+  if (countFriendlyGroundUnits(node, playerId) >= getGroundUnitCapacity(node.development) && !node.groundUnits.some(g => g.id === unitId)) return state;
 
   // Duplication fix: if the ground unit already exists on the node, never append it again.
   const alreadyOnSurface = node.groundUnits.some(g => g.id === unitId);

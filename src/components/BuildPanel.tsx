@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit, MAX_FRIENDLY_GROUND_UNITS_ON_PLANET, countFriendlyGroundUnits } from '../services/gameLogic';
+import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Shield, Star, Anchor } from 'lucide-react';
 
@@ -40,7 +40,8 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   const maxGroundUnits = getGroundUnitBuildLimit(currentNode.development);
   const perTurnCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
   const surfaceFriendlyGround = countFriendlyGroundUnits(currentNode, myPlayerId);
-  const surfaceCapReached = surfaceFriendlyGround >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET;
+  const groundUnitCapacity = getGroundUnitCapacity(currentNode.development);
+  const surfaceCapReached = surfaceFriendlyGround >= groundUnitCapacity;
   const groundUnitsCapReached = perTurnCapReached || surfaceCapReached;
   const canBuildGroundUnit = canBuild && !isBusy && maxGroundUnits > 0 && !groundUnitsCapReached && me.resources >= GROUND_UNIT_STATS.cost;
 
@@ -203,12 +204,12 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
     const latestMax = getGroundUnitBuildLimit(latestNode.development);
     const latestBuilt = latestNode.groundUnitsBuiltThisTurn ?? 0;
-    if (latestMax <= 0 || latestBuilt >= latestMax || countFriendlyGroundUnits(latestNode, myPlayerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return;
+    if (latestMax <= 0 || latestBuilt >= latestMax || countFriendlyGroundUnits(latestNode, myPlayerId) >= getGroundUnitCapacity(latestNode.development)) return;
 
     await spendResources('GroundUnit', GROUND_UNIT_STATS.cost, `Built Ground Unit at ${latestNode.name}`, (n) => {
       const nodeMax = getGroundUnitBuildLimit(n.development);
       const built = n.groundUnitsBuiltThisTurn ?? 0;
-      if (nodeMax <= 0 || built >= nodeMax || countFriendlyGroundUnits(n, myPlayerId) >= MAX_FRIENDLY_GROUND_UNITS_ON_PLANET) return false;
+      if (nodeMax <= 0 || built >= nodeMax || countFriendlyGroundUnits(n, myPlayerId) >= getGroundUnitCapacity(n.development)) return false;
       n.groundUnits.push(createGroundUnit(myPlayerId));
       n.groundUnitsBuiltThisTurn = built + 1;
     });
@@ -351,7 +352,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
               ) : (
                 <span className={`${groundUnitsCapReached ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>
-                  Built: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{MAX_FRIENDLY_GROUND_UNITS_ON_PLANET}
+                  Built: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{groundUnitCapacity}
                 </span>
               )}
             </span>
