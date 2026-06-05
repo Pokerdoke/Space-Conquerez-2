@@ -1,0 +1,539 @@
+import React, { useState } from 'react';
+import type { GameState } from '../types';
+import { createGameRoom, joinGameRoom, updateRoomState } from '../services/database';
+import { generateMap } from '../services/gameLogic';
+import { Users, Copy, Check, ShieldAlert, Play, ArrowRight, Settings } from 'lucide-react';
+import { audio } from '../services/audio';
+
+
+interface LobbyProps {
+  onGameStart: (code: string, myPlayerId: string) => void;
+  onOpenSettings: () => void;
+  dbMode: 'local' | 'supabase';
+}
+
+export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode }) => {
+  // Lobby Navigation State: 'welcome' | 'create' | 'join' | 'waiting'
+  const [view, setView] = useState<'welcome' | 'create' | 'join' | 'waiting'>('welcome');
+  const [playerName, setPlayerName] = useState(() => localStorage.getItem('sc2_player_name') || '');
+  const [roomCode, setRoomCode] = useState('');
+  const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
+  const [mapSize, setMapSize] = useState<GameState['mapSize']>('small');
+  const [npcCount, setNpcCount] = useState<3 | 5 | 7>(3);
+
+  // Active Lobby State
+  const [currentCode, setCurrentCode] = useState('');
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [myPlayerId, setMyPlayerId] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [subscription, setSubscription] = useState<{ unsubscribe: () => void } | null>(null);
+
+  const savePlayerName = (name: string) => {
+    setPlayerName(name);
+    localStorage.setItem('sc2_player_name', name);
+  };
+
+  const handleCreateLobby = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerName.trim()) {
+      setErrorMsg('Please enter your name');
+      return;
+    }
+    setErrorMsg('');
+    setLoading(true);
+    audio.playBuild();
+    
+    try {
+      savePlayerName(playerName);
+      const { code, state } = await createGameRoom(playerName.trim(), maxPlayers, mapSize, npcCount);
+      
+      setCurrentCode(code);
+      setGameState(state);
+      setMyPlayerId(state.players[0].id);
+      setView('waiting');
+      
+      // Start subscription
+      subscribeLobby(code, state.players[0].id);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to create room.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleJoinLobby = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerName.trim()) {
+      setErrorMsg('Please enter your name');
+      return;
+    }
+    if (!roomCode.trim()) {
+      setErrorMsg('Please enter a room code');
+      return;
+    }
+    setErrorMsg('');
+    setLoading(true);
+    audio.playBuild();
+
+    try {
+      savePlayerName(playerName);
+      const code = roomCode.trim().toUpperCase();
+      const state = await joinGameRoom(code, playerName.trim());
+      
+      // Find my player ID (either matching name or the last added player)
+      const matched = state.players.find(p => p.name.trim().toLowerCase() === playerName.trim().toLowerCase());
+      const myId = matched ? matched.id : state.players[state.players.length - 1].id;
+      
+      setCurrentCode(code);
+      setGameState(state);
+      setMyPlayerId(myId);
+      setView('waiting');
+
+      subscribeLobby(code, myId);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to join room.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const subscribeLobby = (code: string, myId: string) => {
+    if (subscription) {
+      subscription.unsubscribe();
+    }
+
+    // Dynamic import to avoid circular dependencies
+    import('../services/database').then((db) => {
+      const unsub = db.subscribeToRoom(code, (newState) => {
+        setGameState(newState);
+        
+        // If the creator starts the game, proceed to start!
+        if (newState.status === 'playing') {
+          unsub();
+          onGameStart(code, myId);
+        }
+      });
+      setSubscription({ unsubscribe: unsub });
+    });
+  };
+
+  const handleToggleReady = async () => {
+    if (!gameState || !currentCode) return;
+    audio.playBeep(400, 0.06);
+
+    const updatedPlayers = gameState.players.map(p => {
+      if (p.id === myPlayerId) {
+        return { ...p, ready: !p.ready };
+      }
+      return p;
+    });
+
+    const updatedState: GameState = {
+      ...gameState,
+      players: updatedPlayers,
+      actionLog: [
+        ...gameState.actionLog,
+        `${gameState.players.find(p => p.id === myPlayerId)?.name} is ${
+          !gameState.players.find(p => p.id === myPlayerId)?.ready ? 'READY' : 'NOT READY'
+        }`
+      ]
+    };
+
+    setGameState(updatedState);
+    await updateRoomState(currentCode, updatedState);
+  };
+
+  const handleStartGame = async () => {
+    if (!gameState || !currentCode) return;
+    audio.playVictory();
+
+    // Map generation node counts
+    const mapNodeCounts = {
+      small: 30,
+      medium: 60,
+      large: 100
+    };
+    const nodeCount = mapNodeCounts[gameState.mapSize];
+
+    // Generate nodes, links, starting fleets, etc.
+    const nodes = generateMap(nodeCount, gameState.players, gameState.npcCount);
+
+    const updatedState: GameState = {
+      ...gameState,
+      status: 'playing',
+      nodes,
+      actionLog: [...gameState.actionLog, 'Game started by creator! Good luck commanders!'],
+      turnStartedAt: new Date().toISOString()
+    };
+
+    setGameState(updatedState);
+    await updateRoomState(currentCode, updatedState);
+  };
+
+  const copyRoomCode = () => {
+    if (!currentCode) return;
+    navigator.clipboard.writeText(currentCode);
+    setCopied(true);
+    audio.playBeep(800, 0.05);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleLeaveLobby = () => {
+    audio.playBeep();
+    if (subscription) {
+      subscription.unsubscribe();
+      setSubscription(null);
+    }
+    setView('welcome');
+    setGameState(null);
+    setCurrentCode('');
+  };
+
+  // Helper to get player colors
+  const playerColorHex = {
+    green: 'text-emerald-400 border-emerald-500 bg-emerald-950/20',
+    blue: 'text-blue-400 border-blue-500 bg-blue-950/20',
+    purple: 'text-violet-400 border-violet-500 bg-violet-950/20',
+    yellow: 'text-amber-400 border-amber-500 bg-amber-950/20'
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-slate-100 select-none relative overflow-hidden bg-slate-950">
+      <div className="starfield" />
+      
+      {/* Settings trigger */}
+      <button 
+        onClick={onOpenSettings}
+        className="absolute top-4 right-4 flex items-center space-x-1 px-3 py-1.5 rounded bg-slate-900/80 border border-slate-800 text-xs text-slate-400 hover:text-white transition-all duration-200 z-10"
+      >
+        <Settings className="h-3.5 w-3.5" />
+        <span>Settings</span>
+        <span className={`inline-block w-2 h-2 rounded-full ml-1 ${dbMode === 'supabase' ? 'bg-blue-400 animate-pulse' : 'bg-emerald-400'}`} />
+      </button>
+
+      {/* Main Container */}
+      <div className="w-full max-w-md z-10">
+        
+        {/* Title Brand */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-500 drop-shadow-[0_0_20px_rgba(99,102,241,0.6)] select-none uppercase">
+            Space Conquererz 2
+          </h1>
+          <p className="text-xs uppercase tracking-wider text-slate-300 mt-2 font-mono">
+            Async 4X Galactic Strategy
+          </p>
+        </div>
+
+        {errorMsg && (
+          <div className="mb-4 p-3 border border-rose-500/40 bg-rose-950/20 text-rose-300 rounded text-sm flex items-center space-x-2 animate-pulse">
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {/* WELCOME VIEW */}
+        {view === 'welcome' && (
+          <div className="glass-panel p-6 space-y-6 rounded-lg border border-slate-800/80">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Commander Name</label>
+              <input
+                type="text"
+                placeholder="Enter commander name..."
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                maxLength={18}
+                className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors uppercase font-mono tracking-wider"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => { audio.playBeep(); setView('create'); }}
+                className="w-full scifi-btn scifi-btn-primary py-3.5 flex items-center justify-center space-x-2 text-base"
+              >
+                <span>Found New Empire</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+              
+              <button
+                onClick={() => { audio.playBeep(); setView('join'); }}
+                className="w-full scifi-btn scifi-btn-secondary py-3.5 flex items-center justify-center space-x-2 text-base"
+              >
+                <span>Join Star Sector</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* CREATE VIEW */}
+        {view === 'create' && (
+          <form onSubmit={handleCreateLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80">
+            <h2 className="text-lg font-bold uppercase tracking-wider text-indigo-400 mb-2">Empire Setup</h2>
+            
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Commander Name</label>
+              <input
+                type="text"
+                placeholder="Enter commander name..."
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Players</label>
+                <select
+                  value={maxPlayers}
+                  onChange={(e) => setMaxPlayers(Number(e.target.value) as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value={2}>2 Players</option>
+                  <option value={3}>3 Players</option>
+                  <option value={4}>4 Players</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">NPC Planets</label>
+                <select
+                  value={npcCount}
+                  onChange={(e) => setNpcCount(Number(e.target.value) as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value={3}>3 NPC Systems</option>
+                  <option value={5}>5 NPC Systems</option>
+                  <option value={7}>7 NPC Systems</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Map Size</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['small', 'medium', 'large'] as GameState['mapSize'][]).map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => { audio.playBeep(); setMapSize(size); }}
+                    className={`py-2 text-xs font-bold uppercase border rounded ${
+                      mapSize === size
+                        ? 'border-indigo-500 bg-indigo-950/20 text-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.2)]'
+                        : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    {size}
+                    <span className="block text-[8px] opacity-60 font-mono mt-0.5">
+                      {size === 'small' ? '30 nodes' : size === 'medium' ? '60 nodes' : '100 nodes'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => { audio.playBeep(); setView('welcome'); }}
+                className="w-1/3 scifi-btn hover:text-white"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-2/3 scifi-btn scifi-btn-primary"
+              >
+                {loading ? 'Generating...' : 'Form Lobby'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* JOIN VIEW */}
+        {view === 'join' && (
+          <form onSubmit={handleJoinLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80">
+            <h2 className="text-lg font-bold uppercase tracking-wider text-indigo-400 mb-2">Join Empire</h2>
+            
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Commander Name</label>
+              <input
+                type="text"
+                placeholder="Enter commander name..."
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Sector Room Code</label>
+              <input
+                type="text"
+                placeholder="E.g. A4D82K"
+                value={roomCode}
+                onChange={(e) => setRoomCode(e.target.value)}
+                maxLength={6}
+                className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-3 text-center text-lg font-mono font-bold tracking-widest text-indigo-400 uppercase focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => { audio.playBeep(); setView('welcome'); }}
+                className="w-1/3 scifi-btn hover:text-white"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-2/3 scifi-btn scifi-btn-secondary"
+              >
+                {loading ? 'Connecting...' : 'Connect Sector'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* WAITING ROOM LOBBY */}
+        {view === 'waiting' && gameState && (
+          <div className="glass-panel p-6 space-y-6 rounded-lg border border-slate-800/80">
+            
+            {/* Sector Header */}
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[10px] uppercase font-mono tracking-wider text-slate-500">Sector Code</span>
+                <div className="text-2xl font-mono font-bold tracking-widest text-indigo-400">
+                  {currentCode}
+                </div>
+              </div>
+              <button
+                onClick={copyRoomCode}
+                className="flex items-center space-x-1 px-3 py-2 rounded bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-400 hover:text-white transition-all duration-200 active:scale-95"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copied ? 'Copied!' : 'Copy Code'}</span>
+              </button>
+            </div>
+
+            {/* Game Options Summary */}
+            <div className="grid grid-cols-3 gap-2 text-center text-xs bg-slate-950/50 border border-slate-800/40 p-2.5 rounded font-mono">
+              <div>
+                <span className="text-[9px] text-slate-500 block">MAP SIZE</span>
+                <span className="text-slate-300 font-bold uppercase">{gameState.mapSize}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-slate-500 block">NPC PLANETS</span>
+                <span className="text-slate-300 font-bold">{gameState.npcCount}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-slate-500 block">CAPACITY</span>
+                <span className="text-slate-300 font-bold">{gameState.players.length}/{gameState.maxPlayers}</span>
+              </div>
+            </div>
+
+            {/* Player Slots */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center">
+                <Users className="h-3.5 w-3.5 mr-1.5" />
+                <span>Sector Control Slots</span>
+              </label>
+
+              <div className="space-y-3">
+                {Array.from({ length: gameState.maxPlayers }).map((_, idx) => {
+                  const player = gameState.players[idx];
+                  if (player) {
+                    const isMe = player.id === myPlayerId;
+                    return (
+                      <div
+                        key={player.id}
+                        className={`flex justify-between items-center p-3 border rounded-lg transition-all duration-200 ${playerColorHex[player.color]}`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <span className="text-[9px] font-mono border px-1.5 py-0.5 rounded opacity-75 uppercase">
+                            P{idx + 1}
+                          </span>
+                          <span className="font-bold tracking-wide text-sm">
+                            {player.name} {isMe && <span className="text-[10px] text-slate-400 font-normal ml-1">(You)</span>}
+                          </span>
+                        </div>
+                        <div>
+                          {isMe ? (
+                            <button
+                              type="button"
+                              onClick={handleToggleReady}
+                              className={`px-3 py-1 text-xs font-bold uppercase rounded border transition-all ${
+                                player.ready
+                                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
+                                  : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'
+                              }`}
+                            >
+                              {player.ready ? 'Ready' : 'Not Ready'}
+                            </button>
+                          ) : (
+                            <span className={`text-xs font-bold uppercase px-2.5 py-1 rounded border ${
+                              player.ready
+                                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
+                                : 'bg-slate-950/40 border-slate-900/60 text-slate-500'
+                            }`}>
+                              {player.ready ? 'Ready' : 'Joining...'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <div
+                        key={`empty-${idx}`}
+                        className="flex justify-between items-center p-3 border border-dashed border-slate-800 bg-slate-950/20 rounded-lg text-slate-600 text-sm font-mono"
+                      >
+                        <span>Waiting for Commander...</span>
+                        <span className="text-xs animate-pulse font-bold tracking-widest text-slate-700">LISTENING</span>
+                      </div>
+                    );
+                  }
+                })}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-2 border-t border-slate-800 space-y-3">
+              {myPlayerId === gameState.creatorId ? (
+                <button
+                  type="button"
+                  onClick={handleStartGame}
+                  disabled={
+                    gameState.players.length < gameState.maxPlayers ||
+                    !gameState.players.every(p => p.ready)
+                  }
+                  className="w-full scifi-btn scifi-btn-primary py-3.5 flex items-center justify-center space-x-2 text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Play className="h-4.5 w-4.5 fill-current" />
+                  <span>Initialize Sector Map</span>
+                </button>
+              ) : (
+                <div className="text-center text-xs font-mono text-slate-500 py-3 bg-slate-950/40 border border-slate-900 rounded animate-pulse">
+                  Waiting for Sector Host to initiate warp sequence...
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleLeaveLobby}
+                className="w-full scifi-btn hover:text-white py-2"
+              >
+                Disconnect & Return
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

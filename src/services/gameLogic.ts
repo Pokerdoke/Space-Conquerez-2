@@ -1,0 +1,573 @@
+import type { GameState, StarNode, Ship, GroundUnit, Player, PlanetDevelopment } from '../types';
+
+// Sci-Fi Names for Nodes
+const STAR_NAMES = [
+  'Sol', 'Proxima', 'Alpha Centauri', 'Sirius', 'Vega', 'Rigel', 'Betelgeuse', 'Antares', 
+  'Aldebaran', 'Arcturus', 'Capella', 'Canopus', 'Procyon', 'Pollux', 'Castor', 'Spica', 
+  'Fomalhaut', 'Deneb', 'Regulus', 'Altair', 'Bellatrix', 'Alnilam', 'Alnitak', 'Mintaka', 
+  'Saiph', 'Meissa', 'Algol', 'Mirfak', 'Alcyone', 'Electra', 'Maia', 'Merope', 'Taygeta', 
+  'Celaeno', 'Asterope', 'Atlas', 'Pleione', 'Polaris', 'Dubhe', 'Merak', 'Phecda', 
+  'Megrez', 'Alioth', 'Mizar', 'Alcor', 'Alkaid', 'Kocab', 'Pherkad', 'Eltanin', 'Rastaban',
+  'Vega Prime', 'Rigel Secundus', 'Betelgeuse III', 'Sirius Minor', 'Proxima Prime'
+];
+
+// Ship templates
+export const SHIP_STATS = {
+  Destroyer: { cost: 10, hp: 14, dmgMin: 2, dmgMax: 6, blocksMovement: true },
+  BattleShip: { cost: 15, hp: 20, dmgMin: 3, dmgMax: 9, blocksMovement: true },
+  Carrier: { cost: 7, hp: 12, dmgMin: 1, dmgMax: 3, blocksMovement: true, capacity: 3, maxFighters: 2 },
+  ColonyShip: { cost: 5, hp: 10, dmgMin: 0, dmgMax: 0, blocksMovement: false },
+  Fighter: { cost: 5, hp: 8, dmgMin: 2, dmgMax: 4, blocksMovement: false }
+};
+
+export const GROUND_UNIT_STATS = { cost: 5, hp: 10, dmgMin: 1, dmgMax: 4 };
+
+export const STRUCTURE_COSTS = {
+  Shipyard: 15,
+  FtlInhibitor: 4,
+  Gateway: 10
+};
+
+export const PLANET_UPGRADES = {
+  none: { cost: 0, res: 1, next: 'colony' as PlanetDevelopment },
+  colony: { cost: 2, res: 2, next: 'city' as PlanetDevelopment },
+  city: { cost: 4, res: 4, next: 'metropolis' as PlanetDevelopment },
+  metropolis: { cost: 12, res: 8, next: null }
+};
+
+// Generate a random ID
+export const generateId = () => Math.random().toString(36).substring(2, 9);
+
+// Create a unique ship
+export function createShip(type: Ship['type'], owner: string): Ship {
+  const stats = SHIP_STATS[type];
+  return {
+    id: generateId(),
+    type,
+    owner,
+    hp: stats.hp,
+    maxHp: stats.hp,
+    dmgMin: stats.dmgMin,
+    dmgMax: stats.dmgMax,
+    canMove: type !== 'Fighter',
+    blocksMovement: stats.blocksMovement,
+    movesLeft: type === 'Fighter' ? 0 : 6,
+    turnsInTerritory: 0,
+    carriedUnits: [],
+    carriedFighters: []
+  };
+}
+
+// Create a unique ground unit
+export function createGroundUnit(owner: string): GroundUnit {
+  return {
+    id: generateId(),
+    type: 'GroundUnit',
+    owner,
+    hp: GROUND_UNIT_STATS.hp,
+    maxHp: GROUND_UNIT_STATS.hp,
+    dmgMin: GROUND_UNIT_STATS.dmgMin,
+    dmgMax: GROUND_UNIT_STATS.dmgMax,
+    turnsInTerritory: 0
+  };
+}
+
+// Generate the Map using concentric rings
+export function generateMap(nodeCount: number, players: Player[], npcCount: number): StarNode[] {
+  const nodes: StarNode[] = [];
+  const rings = Math.ceil(Math.sqrt(nodeCount / 3));
+  const maxRadius = 450;
+  const centerX = 500;
+  const centerY = 500;
+
+  // 1. Calculate node distribution per ring
+  // Outer rings get more nodes (proportional to ring index)
+  let ringWeightsSum = 0;
+  for (let r = 1; r <= rings; r++) {
+    ringWeightsSum += r;
+  }
+
+  const nodesPerRing: number[] = [];
+  let allocated = 0;
+  for (let r = 1; r <= rings; r++) {
+    let count = Math.round(nodeCount * (r / ringWeightsSum));
+    if (r === rings) {
+      count = nodeCount - allocated; // Final ring takes remainder
+    } else {
+      allocated += count;
+    }
+    nodesPerRing.push(count);
+  }
+
+  // Ensure center node has 1 node if needed, or ring 1 is small
+  if (nodesPerRing[0] === 0) nodesPerRing[0] = 1;
+
+  // Let's name and position the nodes
+  let nameIndex = 0;
+  for (let rIndex = 0; rIndex < rings; rIndex++) {
+    const ringNum = rIndex + 1;
+    const radius = (ringNum / rings) * maxRadius;
+    const count = nodesPerRing[rIndex];
+    
+    // Add angular perturbation to make map organic
+    const angleOffset = (ringNum * Math.PI) / rings;
+
+    for (let j = 0; j < count; j++) {
+      const angle = (j * 2 * Math.PI) / count + angleOffset;
+      // Add slight noise to x/y to prevent perfect circles
+      const x = Math.round(centerX + Math.cos(angle) * radius + (Math.random() * 20 - 10));
+      const y = Math.round(centerY + Math.sin(angle) * radius + (Math.random() * 20 - 10));
+
+      const name = STAR_NAMES[nameIndex % STAR_NAMES.length] + 
+        (nameIndex >= STAR_NAMES.length ? ` ${Math.floor(nameIndex / STAR_NAMES.length) + 1}` : '');
+      
+      nodes.push({
+        id: `node-${nameIndex}`,
+        name,
+        x,
+        y,
+        links: [],
+        claimedBy: null,
+        development: 'none',
+        resourceGeneration: 1,
+        hasShipyard: false,
+        hasFtlInhibitor: false,
+        hasGateway: false,
+        ships: [],
+        groundUnits: [],
+        isNpcPlanet: false,
+        isDysonSphere: false
+      });
+      nameIndex++;
+    }
+  }
+
+  // 2. Establish connections (Delaunay-ish Proximity Connections)
+  // Guarantee connectivity via Minimum Spanning Tree first
+  const distance = (n1: StarNode, n2: StarNode) => 
+    Math.sqrt((n1.x - n2.x) ** 2 + (n1.y - n2.y) ** 2);
+
+  // Prim's algorithm for MST
+  const inMst = new Set<string>();
+  inMst.add(nodes[0].id);
+
+  while (inMst.size < nodes.length) {
+    let minD = Infinity;
+    let minFrom: StarNode | null = null;
+    let minTo: StarNode | null = null;
+
+    for (const node of nodes) {
+      if (inMst.has(node.id)) {
+        for (const target of nodes) {
+          if (!inMst.has(target.id)) {
+            const d = distance(node, target);
+            if (d < minD) {
+              minD = d;
+              minFrom = node;
+              minTo = target;
+            }
+          }
+        }
+      }
+    }
+
+    if (minFrom && minTo) {
+      minFrom.links.push(minTo.id);
+      minTo.links.push(minFrom.id);
+      inMst.add(minTo.id);
+    }
+  }
+
+  // Add extra links to keep it interesting, keeping node degree to 2-3
+  for (const node of nodes) {
+    if (node.links.length >= 3) continue;
+
+    // Find nearby nodes
+    const sortedNeighbors = nodes
+      .filter(n => n.id !== node.id && !node.links.includes(n.id))
+      .map(n => ({ node: n, dist: distance(node, n) }))
+      .sort((a, b) => a.dist - b.dist);
+
+    for (const neighbor of sortedNeighbors) {
+      // Connect if the neighbor also has fewer than 3 connections
+      if (node.links.length < 3 && neighbor.node.links.length < 3) {
+        node.links.push(neighbor.node.id);
+        neighbor.node.links.push(node.id);
+      }
+      if (node.links.length >= 3) break;
+    }
+  }
+
+  // 3. Set up Player Homeworlds
+  // Distribute homeworlds evenly on the middle ring (approx. ring index floor(rings/2))
+  const hwRingIndex = Math.max(0, Math.floor(rings / 3.0));
+  const hwRingRadius = ((hwRingIndex + 1) / rings) * maxRadius;
+  const numPlayers = players.length;
+
+  const playerHwNodeIds: string[] = [];
+
+  for (let pIdx = 0; pIdx < numPlayers; pIdx++) {
+    const hwAngle = (pIdx * 2 * Math.PI) / numPlayers;
+    const targetX = centerX + Math.cos(hwAngle) * hwRingRadius;
+    const targetY = centerY + Math.sin(hwAngle) * hwRingRadius;
+
+    // Find closest node that hasn't been claimed yet
+    const candidateNodes = nodes
+      .filter(n => n.claimedBy === null && !playerHwNodeIds.includes(n.id))
+      .map(n => ({ node: n, dist: Math.sqrt((n.x - targetX) ** 2 + (n.y - targetY) ** 2) }))
+      .sort((a, b) => a.dist - b.dist);
+
+    if (candidateNodes.length > 0) {
+      const hwNode = candidateNodes[0].node;
+      hwNode.claimedBy = players[pIdx].id;
+      hwNode.development = 'metropolis';
+      hwNode.resourceGeneration = 8;
+      hwNode.hasShipyard = true;
+      
+      // Starting fleet
+      hwNode.ships = [
+        createShip('Destroyer', players[pIdx].id),
+        createShip('ColonyShip', players[pIdx].id),
+        createShip('Carrier', players[pIdx].id)
+      ];
+
+      // Starting ground defense
+      hwNode.groundUnits = [
+        createGroundUnit(players[pIdx].id)
+      ];
+
+      players[pIdx].homeworldId = hwNode.id;
+      playerHwNodeIds.push(hwNode.id);
+    }
+  }
+
+  // 4. Setup Dyson Sphere (Exact center node)
+  const centerNode = nodes
+    .filter(n => n.claimedBy === null)
+    .map(n => ({ node: n, dist: Math.sqrt((n.x - centerX) ** 2 + (n.y - centerY) ** 2) }))
+    .sort((a, b) => a.dist - b.dist)[0]?.node;
+
+  if (centerNode) {
+    centerNode.name = 'Dyson Prime';
+    centerNode.isDysonSphere = true;
+    centerNode.resourceGeneration = 15;
+    // Guarded by high NPC force
+    centerNode.ships = [createShip('BattleShip', 'npc')];
+    centerNode.groundUnits = [createGroundUnit('npc'), createGroundUnit('npc')];
+  }
+
+  // 5. Setup NPC Planets
+  const potentialNpcNodes = nodes.filter(
+    n => n.claimedBy === null && !n.isDysonSphere
+  );
+
+  // Pick random NPC planets
+  const npcNodesSelected = potentialNpcNodes
+    .sort(() => Math.random() - 0.5)
+    .slice(0, Math.min(npcCount, potentialNpcNodes.length));
+
+  for (const node of npcNodesSelected) {
+    node.isNpcPlanet = true;
+    node.name = node.name + ' (NPC)';
+    node.ships = [createShip('Destroyer', 'npc')];
+    node.groundUnits = [createGroundUnit('npc')];
+  }
+
+  return nodes;
+}
+
+// Check if a node contains enemy units (for blocking movement/ftl)
+export function hasEnemyCombatShips(node: StarNode, playerId: string): boolean {
+  return node.ships.some(s => s.owner !== playerId && s.owner !== 'npc' && s.blocksMovement);
+}
+
+export function hasEnemyFtlInhibitor(node: StarNode, playerId: string): boolean {
+  return node.hasFtlInhibitor && node.claimedBy !== null && node.claimedBy !== playerId;
+}
+
+// Calculate movement range for a ship using Breadth First Search (BFS)
+export function getReachableNodes(
+  startNodeId: string, 
+  ship: Ship, 
+  nodes: StarNode[], 
+  playerId: string
+): { [nodeId: string]: number } {
+  const reachable: { [nodeId: string]: number } = {};
+  const queue: { id: string; dist: number }[] = [{ id: startNodeId, dist: 0 }];
+  
+  const nodeMap = new Map<string, StarNode>(nodes.map(n => [n.id, n]));
+  
+  // Find all friendly gateways
+  const friendlyGateways = new Set(
+    nodes.filter(n => n.hasGateway && n.claimedBy === playerId).map(n => n.id)
+  );
+
+  while (queue.length > 0) {
+    const { id, dist } = queue.shift()!;
+    
+    if (dist > ship.movesLeft) continue;
+
+    // Record minimum distance to reach this node
+    if (reachable[id] === undefined || dist < reachable[id]) {
+      reachable[id] = dist;
+    }
+
+    const currentNode = nodeMap.get(id);
+    if (!currentNode) continue;
+
+    // Determine pathfinding branches. If the node has enemy ships or enemy FTL inhibitor, it blocks movement!
+    // The ship can MOVE to this node, but CANNOT pass through it. So we stop branching here.
+    const isBlocked = id !== startNodeId && (
+      hasEnemyCombatShips(currentNode, playerId) || 
+      hasEnemyFtlInhibitor(currentNode, playerId)
+    );
+
+    if (isBlocked) {
+      continue; // Terminal node. We can reach it, but cannot move further from it.
+    }
+
+    // Normal neighbor nodes
+    const neighbors = [...currentNode.links];
+
+    // Gateway jump: if current node has a friendly gateway, add all other friendly gateways as neighbors
+    if (currentNode.hasGateway && currentNode.claimedBy === playerId) {
+      for (const gwId of friendlyGateways) {
+        if (gwId !== id && !neighbors.includes(gwId)) {
+          neighbors.push(gwId);
+        }
+      }
+    }
+
+    for (const neighborId of neighbors) {
+      const nextDist = dist + 1;
+      if (nextDist <= ship.movesLeft) {
+        // Queue if it's unvisited or we found a shorter path
+        if (reachable[neighborId] === undefined || nextDist < reachable[neighborId]) {
+          queue.push({ id: neighborId, dist: nextDist });
+        }
+      }
+    }
+  }
+
+  // Remove the starting node from reachable options
+  delete reachable[startNodeId];
+  return reachable;
+}
+
+// Heal units in friendly territory
+// At start of Build phase: 
+// 1 turn to full HP with shipyard, 2 turns without.
+export function processHealing(nodes: StarNode[], activePlayerId: string): string[] {
+  const log: string[] = [];
+
+  for (const node of nodes) {
+    const isFriendly = node.claimedBy === activePlayerId;
+    if (!isFriendly) {
+      // Clear territory counters for enemies/neutral nodes
+      for (const ship of node.ships) {
+        if (ship.owner === activePlayerId) ship.turnsInTerritory = 0;
+      }
+      for (const gu of node.groundUnits) {
+        if (gu.owner === activePlayerId) gu.turnsInTerritory = 0;
+      }
+      continue;
+    }
+
+    // Process friendly ships
+    for (const ship of node.ships) {
+      if (ship.owner !== activePlayerId) continue;
+
+      if (ship.hp < ship.maxHp) {
+        ship.turnsInTerritory++;
+        const requiredTurns = node.hasShipyard ? 1 : 2;
+        if (ship.turnsInTerritory >= requiredTurns) {
+          ship.hp = ship.maxHp;
+          ship.turnsInTerritory = 0;
+          log.push(`Ship ${ship.type} healed to full at ${node.name}.`);
+        }
+      } else {
+        ship.turnsInTerritory = 0;
+      }
+
+      // Heal carried fighters
+      for (const fighter of ship.carriedFighters) {
+        if (fighter.hp < fighter.maxHp) {
+          fighter.turnsInTerritory++;
+          const requiredTurns = node.hasShipyard ? 1 : 2;
+          if (fighter.turnsInTerritory >= requiredTurns) {
+            fighter.hp = fighter.maxHp;
+            fighter.turnsInTerritory = 0;
+            log.push(`Fighter carried by Carrier healed to full at ${node.name}.`);
+          }
+        } else {
+          fighter.turnsInTerritory = 0;
+        }
+      }
+    }
+
+    // Process friendly ground units
+    for (const gu of node.groundUnits) {
+      if (gu.owner !== activePlayerId) continue;
+
+      if (gu.hp < gu.maxHp) {
+        gu.turnsInTerritory++;
+        const requiredTurns = node.hasShipyard ? 1 : 2;
+        if (gu.turnsInTerritory >= requiredTurns) {
+          gu.hp = gu.maxHp;
+          gu.turnsInTerritory = 0;
+          log.push(`Ground Unit healed to full at ${node.name}.`);
+        }
+      } else {
+        gu.turnsInTerritory = 0;
+      }
+    }
+  }
+
+  return log;
+}
+
+// Roll random damage within range
+const rollDamage = (min: number, max: number) => 
+  min === 0 ? 0 : Math.floor(Math.random() * (max - min + 1)) + min;
+
+// Space Combat Resolution
+export interface CombatResult {
+  attackerDmg: number;
+  defenderDmg: number;
+  attackerDestroyed: boolean;
+  defenderDestroyed: boolean;
+  carriedLossesCount: number;
+}
+
+export function resolveSpaceCombat(
+  attacker: Ship, 
+  defender: Ship, 
+  attackerNode: StarNode,
+  defenderNode: StarNode
+): CombatResult {
+  // Deal damage simultaneously
+  const attDmg = rollDamage(attacker.dmgMin, attacker.dmgMax);
+  const defDmg = rollDamage(defender.dmgMin, defender.dmgMax);
+
+  attacker.hp = Math.max(0, attacker.hp - defDmg);
+  defender.hp = Math.max(0, defender.hp - attDmg);
+  
+  // Combat resets healing timer
+  attacker.turnsInTerritory = 0;
+  defender.turnsInTerritory = 0;
+
+  const attackerDestroyed = attacker.hp <= 0;
+  const defenderDestroyed = defender.hp <= 0;
+  let carriedLossesCount = 0;
+
+  // Handle destruction of Carrier carried units
+  if (attackerDestroyed && attacker.type === 'Carrier') {
+    carriedLossesCount += attacker.carriedUnits.length + attacker.carriedFighters.length;
+    attacker.carriedUnits = [];
+    attacker.carriedFighters = [];
+  }
+  if (defenderDestroyed && defender.type === 'Carrier') {
+    carriedLossesCount += defender.carriedUnits.length + defender.carriedFighters.length;
+    defender.carriedUnits = [];
+    defender.carriedFighters = [];
+  }
+
+  // Remove destroyed ships from respective nodes
+  if (attackerDestroyed) {
+    attackerNode.ships = attackerNode.ships.filter(s => s.id !== attacker.id);
+  }
+  if (defenderDestroyed) {
+    defenderNode.ships = defenderNode.ships.filter(s => s.id !== defender.id);
+  }
+
+  return {
+    attackerDmg: attDmg,
+    defenderDmg: defDmg,
+    attackerDestroyed,
+    defenderDestroyed,
+    carriedLossesCount
+  };
+}
+
+// Ground Combat Resolution
+export function resolveGroundCombat(
+  attacker: GroundUnit, 
+  defender: GroundUnit, 
+  node: StarNode
+): {
+  attackerDmg: number;
+  defenderDmg: number;
+  attackerDestroyed: boolean;
+  defenderDestroyed: boolean;
+} {
+  const attDmg = rollDamage(attacker.dmgMin, attacker.dmgMax);
+  const defDmg = rollDamage(defender.dmgMin, defender.dmgMax);
+
+  attacker.hp = Math.max(0, attacker.hp - defDmg);
+  defender.hp = Math.max(0, defender.hp - attDmg);
+
+  attacker.turnsInTerritory = 0;
+  defender.turnsInTerritory = 0;
+
+  const attackerDestroyed = attacker.hp <= 0;
+  const defenderDestroyed = defender.hp <= 0;
+
+  if (attackerDestroyed) {
+    node.groundUnits = node.groundUnits.filter(g => g.id !== attacker.id);
+  }
+  if (defenderDestroyed) {
+    node.groundUnits = node.groundUnits.filter(g => g.id !== defender.id);
+  }
+
+  return {
+    attackerDmg: attDmg,
+    defenderDmg: defDmg,
+    attackerDestroyed,
+    defenderDestroyed
+  };
+}
+
+// Check Win Conditions
+// 1. Domination: Claim 70% or more of the map nodes
+// 2. Eradication: Destroy all enemy homeworld nodes (homeworld claimed by others)
+export function checkWinCondition(state: GameState): Player | null {
+  const totalNodes = state.nodes.length;
+  if (totalNodes === 0) return null;
+
+  // Calculate claimed nodes per player
+  const claims: { [playerId: string]: number } = {};
+  for (const player of state.players) {
+    claims[player.id] = 0;
+  }
+
+  for (const node of state.nodes) {
+    if (node.claimedBy && claims[node.claimedBy] !== undefined) {
+      claims[node.claimedBy]++;
+    }
+  }
+
+  // 1. Domination check
+  for (const player of state.players) {
+    const claimRatio = claims[player.id] / totalNodes;
+    if (claimRatio >= 0.7) {
+      return player;
+    }
+  }
+
+  // 2. Eradication check: has anyone lost their homeworld AND has no other ways to survive?
+  // Let's look at owners of homeworld nodes
+  const hwOwners = new Set(
+    state.players.map(p => {
+      const hwNode = state.nodes.find(n => n.id === p.homeworldId);
+      return hwNode?.claimedBy;
+    }).filter(Boolean)
+  );
+
+  const activePlayers = state.players.filter(p => hwOwners.has(p.id));
+  if (activePlayers.length === 1 && state.players.length > 1) {
+    // Only one player still owns their homeworld! They win.
+    return activePlayers[0];
+  }
+
+  return null;
+}
