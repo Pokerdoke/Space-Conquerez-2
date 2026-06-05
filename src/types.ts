@@ -64,7 +64,17 @@ export interface StarNode {
 export interface Alliance {
   id: string;
   playerIds: [string, string];
-  status: 'active' | 'breaking';
+  /**
+   * pending = request sent, no gameplay effects yet
+   * active = accepted, ally rules apply
+   * breaking = accepted alliance that will end after breaker's action phase
+   * declined = stored as a short-lived notification so the requester can see the response
+   */
+  status: 'pending' | 'active' | 'breaking' | 'declined';
+  requestedBy?: string;
+  requestedAt?: string;
+  respondedBy?: string;
+  respondedAt?: string;
   breakRequestedBy?: string;
   breakEffectiveAfterPlayerId?: string;
 }

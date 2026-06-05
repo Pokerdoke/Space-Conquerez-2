@@ -282,13 +282,7 @@ export const App: React.FC = () => {
     setSelectedNode(null); setSelectedShip(null);
   };
 
-  const handleUpdateGameState = async (updatedState: GameState) => {
-    if (!gameState) return;
-    const active = gameState.players[gameState.activePlayerIndex];
-    if (gameState.status === 'playing' && active?.id !== myPlayerId) {
-      audio.playBeep(160, 0.08);
-      return;
-    }
+  const stampAndSyncState = async (updatedState: GameState) => {
     const stamped: GameState = {
       ...updatedState,
       lastUpdated: new Date().toISOString(),
@@ -299,6 +293,22 @@ export const App: React.FC = () => {
     if (!isTutorialMode) {
       await updateRoomState(currentCode, stamped);
     }
+  };
+
+  const handleUpdateGameState = async (updatedState: GameState) => {
+    if (!gameState) return;
+    const active = gameState.players[gameState.activePlayerIndex];
+    if (gameState.status === 'playing' && active?.id !== myPlayerId) {
+      audio.playBeep(160, 0.08);
+      return;
+    }
+    await stampAndSyncState(updatedState);
+  };
+
+  const handleDiplomacyStateUpdate = async (updatedState: GameState) => {
+    // Diplomacy requests and responses are messages between players, not map actions,
+    // so they are allowed even when it is not your active turn.
+    await stampAndSyncState(updatedState);
   };
 
   const handleStartTutorialScenario = (scenarioId: TutorialScenarioId) => {
@@ -329,6 +339,18 @@ export const App: React.FC = () => {
   const activePlayer = gameState.players[gameState.activePlayerIndex];
   const isMyActiveTurn = activePlayer.id === myPlayerId;
   const me = gameState.players.find(p => p.id === myPlayerId);
+  const incomingAllianceRequests = (gameState.alliances || []).filter(a =>
+    a.status === 'pending' &&
+    a.playerIds.includes(myPlayerId) &&
+    a.requestedBy !== myPlayerId
+  );
+  const latestAllianceResponseForMe = [...(gameState.alliances || [])]
+    .filter(a =>
+      a.requestedBy === myPlayerId &&
+      !!a.respondedBy &&
+      (a.status === 'active' || a.status === 'declined')
+    )
+    .sort((a, b) => new Date(b.respondedAt || '').getTime() - new Date(a.respondedAt || '').getTime())[0];
 
   const phaseNames = ['BUILD', 'MOVEMENT', 'ACTION'];
   const phaseColors: Record<number, string> = {
@@ -365,11 +387,11 @@ export const App: React.FC = () => {
 
 
         return (
-          <header className="z-20 flex-shrink-0 w-full bg-slate-900/95 border-b border-slate-700/60 flex items-stretch text-slate-200"
+          <header className="z-20 flex-shrink-0 w-full glass-panel border-b border-cyan-500/20 flex items-stretch text-slate-200"
             style={{ minHeight: '52px' }}>
 
             {/* LEFT: Logo + Turn + Phase */}
-            <div className="flex items-center px-4 border-r border-slate-700/50 gap-3">
+            <div className="flex items-center px-4 border-r border-cyan-500/15 gap-3">
               <span className="text-[12px] font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 uppercase font-mono hidden md:block">
                 CONQUERERZ II
               </span>
@@ -384,7 +406,7 @@ export const App: React.FC = () => {
             </div>
 
             {/* CENTER: Stellaris resource bar */}
-            <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-slate-700/50">
+            <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-cyan-500/15">
               {/* Credits (Energy Credits) */}
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-base">🪙</span>
@@ -461,7 +483,7 @@ export const App: React.FC = () => {
             </div>
 
             {/* RIGHT: My actions + controls */}
-            <div className="flex items-center px-3 gap-2 border-l border-slate-700/50">
+            <div className="flex items-center px-3 gap-2 border-l border-cyan-500/15">
               <label className="flex items-center gap-1.5 text-[9px] font-bold font-mono tracking-wider text-slate-400 cursor-pointer">
                 <input
                   type="checkbox"
@@ -474,8 +496,15 @@ export const App: React.FC = () => {
               <SoundToggle />
               <button
                 onClick={() => setIsDiplomacyOpen(true)}
-                className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all flex items-center gap-1"
-              ><Handshake className="h-3 w-3" /> DIP</button>
+                className="relative px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all flex items-center gap-1"
+              >
+                <Handshake className="h-3 w-3" /> DIP
+                {incomingAllianceRequests.length > 0 && (
+                  <span className="absolute -top-2 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-cyan-400 text-slate-950 text-[9px] leading-4 text-center font-black animate-pulse">
+                    {incomingAllianceRequests.length}
+                  </span>
+                )}
+              </button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all"
@@ -515,8 +544,8 @@ export const App: React.FC = () => {
         )}
 
         {/* In-Game log console (top-left corner, desktop only) */}
-        <div className="absolute right-3 top-20 z-10 w-60 max-h-32 bg-slate-900/80 border border-slate-700/60 rounded p-2 overflow-y-auto text-[9px] font-mono text-slate-400 space-y-0.5 pointer-events-auto shadow-lg hidden md:block backdrop-blur-sm">
-          <div className="border-b border-slate-700 pb-1 mb-1 font-bold text-indigo-400 text-[9px] uppercase tracking-wider">Event Journal</div>
+        <div className="absolute right-3 top-20 z-10 w-64 max-h-36 holo-panel rounded p-2 overflow-y-auto text-[9px] font-mono text-slate-300 space-y-0.5 pointer-events-auto hidden md:block">
+          <div className="border-b border-cyan-500/20 pb-1 mb-1 font-bold text-cyan-300 text-[9px] uppercase tracking-[0.2em]">Event Journal</div>
           {gameState.actionLog.slice(-12).reverse().map((log, idx) => (
             <div key={idx} className="leading-tight text-[9px] border-b border-slate-900/30 pb-0.5">{log}</div>
           ))}
@@ -524,7 +553,7 @@ export const App: React.FC = () => {
 
         {/* Waiting for turn — persistent top banner */}
         {!isMyActiveTurn && gameState.status === 'playing' && (
-          <div className="absolute top-0 left-0 right-0 z-20 bg-slate-900/90 backdrop-blur-sm border-t border-slate-700/60 px-4 py-2 flex items-center justify-between animate-fadeIn">
+          <div className="absolute top-0 left-0 right-0 z-20 holo-panel border-t border-cyan-500/20 px-4 py-2 flex items-center justify-between animate-fadeIn">
             <div className="flex items-center gap-3">
               <div className="w-2 h-2 rounded-full animate-ping" style={{ background: playerColorMap[activePlayer.color] }} />
               <span className="text-xs font-mono text-slate-300">
@@ -537,6 +566,30 @@ export const App: React.FC = () => {
             </button>
           </div>
         )}
+
+        {incomingAllianceRequests.length > 0 ? (
+          <button
+            onClick={() => setIsDiplomacyOpen(true)}
+            className="absolute top-14 right-3 z-30 max-w-xs text-left bg-cyan-950/90 border border-cyan-500/50 rounded-lg shadow-2xl px-3 py-2 backdrop-blur-sm hover:bg-cyan-900/90 transition-all animate-fadeIn"
+          >
+            <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-300">Diplomacy Message</div>
+            <div className="text-xs font-bold text-white">
+              {gameState.players.find(p => p.id === incomingAllianceRequests[0].requestedBy)?.name || 'Another empire'} wants an alliance
+            </div>
+            <div className="text-[10px] text-slate-300">Click to accept or decline.</div>
+          </button>
+        ) : latestAllianceResponseForMe && (
+          <button
+            onClick={() => setIsDiplomacyOpen(true)}
+            className="absolute top-14 right-3 z-30 max-w-xs text-left bg-slate-950/90 border border-slate-600 rounded-lg shadow-2xl px-3 py-2 backdrop-blur-sm hover:bg-slate-900/90 transition-all animate-fadeIn"
+          >
+            <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-slate-300">Alliance Response</div>
+            <div className="text-xs font-bold text-white">
+              {gameState.players.find(p => p.id === latestAllianceResponseForMe.respondedBy)?.name || 'Another empire'} {latestAllianceResponseForMe.status === 'active' ? 'accepted' : 'declined'} your alliance request
+            </div>
+            <div className="text-[10px] text-slate-300">Open diplomacy for details.</div>
+          </button>
+        )}
       </main>
 
       {/* ═══ 3. FLOATERS ═══ */}
@@ -547,7 +600,7 @@ export const App: React.FC = () => {
         <div className="fixed bottom-4 right-44 z-40">
           <button
             onClick={handleNextPhase}
-            className="flex items-center space-x-2 px-5 py-3 scifi-btn scifi-btn-primary shadow-2xl rounded text-sm tracking-wider"
+            className="flex items-center space-x-2 px-5 py-3 scifi-btn scifi-btn-primary shadow-2xl rounded text-sm tracking-wider holo-panel"
           >
             <span>
               {gameState.phase === 2 ? 'Complete Turn' : `Next Phase: ${phaseNames[(gameState.phase + 1) % 3]}`}
@@ -573,7 +626,7 @@ export const App: React.FC = () => {
 
       {/* ═══ 6. DIPLOMACY / SETTINGS OVERLAYS ═══ */}
       {isDiplomacyOpen && (
-        <DiplomacyPanel gameState={gameState} myPlayerId={myPlayerId} onClose={() => setIsDiplomacyOpen(false)} onUpdateState={handleUpdateGameState} />
+        <DiplomacyPanel gameState={gameState} myPlayerId={myPlayerId} onClose={() => setIsDiplomacyOpen(false)} onUpdateState={handleDiplomacyStateUpdate} />
       )}
 
       {isSettingsOpen && (
