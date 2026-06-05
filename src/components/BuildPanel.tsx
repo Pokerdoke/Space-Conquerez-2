@@ -28,14 +28,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   // Active validation checks
   const canBuild = isMyTurn && isBuildPhase && isOwner;
 
-  // Track ground units built on this node this turn from actionLog
-  // (We search actionLog for "Built Ground Unit at NodeName on turn TurnNum")
-  const getGroundUnitsBuiltThisTurn = () => {
-    const searchStr = `Built Ground Unit at ${node.name} (Turn ${gameState.turnNumber})`;
-    return gameState.actionLog.filter(log => log.includes(searchStr)).length;
-  };
-
-  const groundUnitsBuilt = getGroundUnitsBuiltThisTurn();
+  const groundUnitsBuilt = node.groundUnitsBuiltThisTurn ?? 0;
   const maxGroundUnits = node.development === 'metropolis' ? 6 : node.development === 'city' ? 3 : 0;
   const groundUnitsCapReached = groundUnitsBuilt >= maxGroundUnits;
 
@@ -153,6 +146,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
       `Built Ground Unit at ${node.name}`,
       (n) => {
         n.groundUnits.push(createGroundUnit(myPlayerId));
+        n.groundUnitsBuiltThisTurn = (n.groundUnitsBuiltThisTurn ?? 0) + 1;
       }
     );
   };
@@ -355,7 +349,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               className="w-full flex items-center justify-between p-3 border border-slate-800 bg-slate-950/40 rounded hover:border-amber-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
             >
               <div>
-                <span className="block text-xs font-semibold text-slate-300">Ground Combat Division</span>
+                <span className="block text-xs font-semibold text-slate-300">Build Ground Unit ({GROUND_UNIT_STATS.cost})</span>
                 <span className="text-[9px] text-slate-500 font-mono block">
                   HP:{GROUND_UNIT_STATS.hp} | DMG:{GROUND_UNIT_STATS.dmgMin}-{GROUND_UNIT_STATS.dmgMax}
                 </span>

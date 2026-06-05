@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { GameState } from '../types';
-import { createGameRoom, joinGameRoom, updateRoomState } from '../services/database';
+import { createGameRoom, joinGameRoom, updateRoomState, getSavedPlayerName } from '../services/database';
 import { generateMap } from '../services/gameLogic';
 import { Users, Copy, Check, ShieldAlert, Play, ArrowRight, Settings } from 'lucide-react';
 import { audio } from '../services/audio';
@@ -15,7 +15,7 @@ interface LobbyProps {
 export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode }) => {
   // Lobby Navigation State: 'welcome' | 'create' | 'join' | 'waiting'
   const [view, setView] = useState<'welcome' | 'create' | 'join' | 'waiting'>('welcome');
-  const [playerName, setPlayerName] = useState(() => localStorage.getItem('sc2_player_name') || '');
+  const [playerName, setPlayerName] = useState(() => getSavedPlayerName());
   const [roomCode, setRoomCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
   const [mapSize, setMapSize] = useState<GameState['mapSize']>('small');
@@ -32,8 +32,43 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
 
   const savePlayerName = (name: string) => {
     setPlayerName(name);
-    localStorage.setItem('sc2_player_name', name);
+    localStorage.setItem('void_empires_player_name', name);
   };
+
+  useEffect(() => {
+    const code = localStorage.getItem('void_empires_active_game');
+    const savedId = localStorage.getItem('void_empires_player_id');
+    if (!code || !savedId) return;
+    let cancelled = false;
+    setLoading(true);
+    joinGameRoom(code, getSavedPlayerName())
+      .then((state) => {
+        if (cancelled) return;
+        const player = state.players.find(p => p.id === savedId);
+        if (!player) {
+          localStorage.removeItem('void_empires_active_game');
+          return;
+        }
+        setCurrentCode(code);
+        setGameState(state);
+        setMyPlayerId(player.id);
+        if (state.status === 'playing') {
+          onGameStart(code, player.id);
+        } else {
+          setView('waiting');
+          subscribeLobby(code, player.id);
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('void_empires_active_game');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+    // run only once on app launch
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleCreateLobby = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,8 +117,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
       const code = roomCode.trim().toUpperCase();
       const state = await joinGameRoom(code, playerName.trim());
       
-      // Find my player ID (either matching name or the last added player)
-      const matched = state.players.find(p => p.name.trim().toLowerCase() === playerName.trim().toLowerCase());
+      // Use the persistent local UUID when rejoining from this device.
+      const savedId = localStorage.getItem('void_empires_player_id');
+      const matched = state.players.find(p => p.id === savedId) || state.players.find(p => p.name.trim().toLowerCase() === playerName.trim().toLowerCase());
       const myId = matched ? matched.id : state.players[state.players.length - 1].id;
       
       setCurrentCode(code);
@@ -219,10 +255,10 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         {/* Title Brand */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-500 drop-shadow-[0_0_20px_rgba(99,102,241,0.6)] select-none uppercase">
-            Space Conquererz 2
+            Void Empires
           </h1>
           <p className="text-xs uppercase tracking-wider text-slate-300 mt-2 font-mono">
-            Async 4X Galactic Strategy
+            Real-time 4X Galactic Strategy
           </p>
         </div>
 

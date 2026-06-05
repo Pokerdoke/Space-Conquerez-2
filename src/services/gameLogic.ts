@@ -20,7 +20,7 @@ export const SHIP_STATS = {
   Fighter: { cost: 5, hp: 8, dmgMin: 2, dmgMax: 4, blocksMovement: false }
 };
 
-export const GROUND_UNIT_STATS = { cost: 5, hp: 10, dmgMin: 1, dmgMax: 4 };
+export const GROUND_UNIT_STATS = { cost: 3, hp: 10, dmgMin: 1, dmgMax: 4 };
 
 export const STRUCTURE_COSTS = {
   Shipyard: 15,
@@ -135,6 +135,7 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
         hasGateway: false,
         ships: [],
         groundUnits: [],
+        groundUnitsBuiltThisTurn: 0,
         isNpcPlanet: false,
         isDysonSphere: false
       });
@@ -525,6 +526,134 @@ export function resolveGroundCombat(
     attackerDestroyed,
     defenderDestroyed
   };
+}
+
+
+
+// Carrier troop transport and invasion helpers. These return a complete new GameState object
+// so callers can write the entire JSON document to Supabase atomically.
+function cloneGameState(state: GameState): GameState {
+  return JSON.parse(JSON.stringify(state)) as GameState;
+}
+
+function currentTimestamp() {
+  return new Date().toISOString();
+}
+
+export function resetGroundUnitBuildCounters(nodes: StarNode[]): StarNode[] {
+  return nodes.map(node => ({ ...node, groundUnitsBuiltThisTurn: 0 }));
+}
+
+export function loadGroundUnitToCarrier(
+  state: GameState,
+  nodeId: string,
+  carrierId: string,
+  unitId: string,
+  playerId: string
+): GameState {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) return state;
+  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+
+  const unit = node.groundUnits.find(g => g.id === unitId && g.owner === playerId);
+  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
+  if (!unit || !carrier) return state;
+  if (carrier.carriedUnits.length >= 3) return state;
+  if (carrier.carriedUnits.some(g => g.id === unitId)) return state;
+
+  // Atomic sync: remove from planet surface and add to carrier cargo in the same new state.
+  node.groundUnits = node.groundUnits.filter(g => g.id !== unitId);
+  carrier.carriedUnits = [...carrier.carriedUnits.filter(g => g.id !== unitId), unit];
+  // New rules: carriers carry ground units only.
+  carrier.carriedFighters = [];
+  next.actionLog = [...next.actionLog, `${player.name}: Loaded Ground Unit into Carrier at ${node.name}.`];
+  next.lastAction = 'load_ground_unit';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return next;
+}
+
+export function unloadGroundUnitFromCarrier(
+  state: GameState,
+  nodeId: string,
+  carrierId: string,
+  unitId: string,
+  playerId: string
+): GameState {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) return state;
+  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+
+  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
+  const unit = carrier?.carriedUnits.find(g => g.id === unitId);
+  if (!carrier || !unit) return state;
+
+  // Duplication fix: if the ground unit already exists on the node, never append it again.
+  const alreadyOnSurface = node.groundUnits.some(g => g.id === unitId);
+  carrier.carriedUnits = carrier.carriedUnits.filter(g => g.id !== unitId);
+  carrier.carriedFighters = [];
+  if (!alreadyOnSurface) {
+    node.groundUnits = [...node.groundUnits, unit];
+  }
+
+  next.actionLog = [
+    ...next.actionLog,
+    alreadyOnSurface
+      ? `${player.name}: Removed duplicate cargo reference for Ground Unit at ${node.name}.`
+      : `${player.name}: Unloaded Ground Unit from Carrier at ${node.name}.`
+  ];
+  next.lastAction = 'unload_ground_unit';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return next;
+}
+
+export function invadePlanetWithCarrier(
+  state: GameState,
+  nodeId: string,
+  carrierId: string,
+  playerId: string
+): GameState {
+  const next = cloneGameState(state);
+  const player = next.players.find(p => p.id === playerId);
+  const node = next.nodes.find(n => n.id === nodeId);
+  if (!node || !player) return state;
+  const isActive = next.players[next.activePlayerIndex]?.id === playerId;
+  const isEnemyOrNpcPlanet = node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== playerId);
+  const enemyCombatShips = node.ships.some(s => s.owner !== playerId && s.blocksMovement);
+  const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
+  if (!isActive || next.phase !== 2 || !isEnemyOrNpcPlanet || enemyCombatShips || !carrier || carrier.carriedUnits.length === 0) {
+    return state;
+  }
+
+  const deploying = [...carrier.carriedUnits];
+  const deployingIds = new Set(deploying.map(g => g.id));
+  carrier.carriedUnits = [];
+  carrier.carriedFighters = [];
+
+  // Remove stale duplicates from the surface first, then add each attacking troop once.
+  node.groundUnits = node.groundUnits.filter(g => !deployingIds.has(g.id));
+  const defendersBeforeDeploy = node.groundUnits.filter(g => g.owner !== playerId);
+  node.groundUnits = [...node.groundUnits, ...deploying];
+
+  const logs = [`${player.name}: Launched planetary invasion at ${node.name} with ${deploying.length} Ground Unit(s).`];
+  if (defendersBeforeDeploy.length === 0) {
+    node.claimedBy = playerId;
+    node.isNpcPlanet = false;
+    logs.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
+  } else {
+    logs.push(`Ground combat has begun on ${node.name}. Select attacker and defender units to resolve rounds.`);
+  }
+
+  next.actionLog = [...next.actionLog, ...logs];
+  next.lastAction = 'invade_planet';
+  next.lastActionAt = currentTimestamp();
+  next.lastUpdated = next.lastActionAt;
+  return next;
 }
 
 // Check Win Conditions

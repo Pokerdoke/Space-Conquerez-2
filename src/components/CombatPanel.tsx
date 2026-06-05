@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { GameState, StarNode } from '../types';
-import { resolveSpaceCombat, resolveGroundCombat } from '../services/gameLogic';
+import { resolveSpaceCombat, resolveGroundCombat, invadePlanetWithCarrier } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Swords, ShieldAlert, Crosshair } from 'lucide-react';
 
@@ -54,7 +54,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
 
   // Group combat forces
   const myCombatShips = node.ships.filter(s => s.owner === myPlayerId && s.type !== 'ColonyShip');
-  const enemyCombatShips = node.ships.filter(s => s.owner !== myPlayerId && s.type !== 'ColonyShip');
+  const enemyCombatShips = node.ships.filter(s => s.owner !== myPlayerId && s.type !== 'ColonyShip' && s.blocksMovement);
   
   const myGroundUnits = node.groundUnits.filter(g => g.owner === myPlayerId);
   const enemyGroundUnits = node.groundUnits.filter(g => g.owner !== myPlayerId);
@@ -63,7 +63,9 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   const spaceCombatAvailable = isMyTurn && isCombatPhase && myCombatShips.length > 0 && enemyCombatShips.length > 0;
   
   // Ground combat is available ONLY when no enemy ships are in orbit
-  const enemyShipsInOrbit = node.ships.some(s => s.owner !== myPlayerId);
+  const enemyShipsInOrbit = enemyCombatShips.length > 0;
+  const invadingCarrier = node.ships.find(s => s.owner === myPlayerId && s.type === 'Carrier' && s.carriedUnits.length > 0);
+  const canInvadePlanet = isMyTurn && isCombatPhase && Boolean(invadingCarrier) && !enemyShipsInOrbit && (node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== myPlayerId));
   const groundCombatAvailable = isMyTurn && isCombatPhase && !enemyShipsInOrbit && myGroundUnits.length > 0 && enemyGroundUnits.length > 0;
 
   // Space Combat resolution handler
@@ -127,6 +129,19 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     }, 400);
   };
 
+  const handleInvadePlanet = () => {
+    if (!invadingCarrier || !canInvadePlanet) return;
+    audio.playMove();
+    const updatedState = invadePlanetWithCarrier(gameState, node.id, invadingCarrier.id, myPlayerId);
+    const newNode = updatedState.nodes.find(n => n.id === node.id);
+    const latestLog = updatedState.actionLog.slice(-2);
+    setCombatReport(prev => [...latestLog, ...prev]);
+    if (newNode?.claimedBy === myPlayerId && !newNode.groundUnits.some(g => g.owner !== myPlayerId)) {
+      audio.playVictory();
+    }
+    onUpdateState(updatedState);
+  };
+
   // Ground Combat resolution handler
   const handleGroundCombat = () => {
     if (!selectedAttackerGroundId || !selectedDefenderGroundId) return;
@@ -165,7 +180,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
         const remainingDefenders = node.groundUnits.filter(g => g.owner !== myPlayerId);
         if (remainingDefenders.length === 0) {
           captured = true;
-          roundDesc.push(`- PLANET CAPTURED: ${me.name} has captured the surface of ${node.name}!`);
+          roundDesc.push(`- Planet captured! ${me.name} has captured the surface of ${node.name}!`);
         }
       }
 
@@ -177,6 +192,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
           const updatedNode = { ...node }; // Modified in-place by resolveGroundCombat
           if (captured) {
             updatedNode.claimedBy = myPlayerId;
+            updatedNode.isNpcPlanet = false;
             // Downgrade planet slightly due to intense bombardment (optional but fun 4X trope!)
             if (updatedNode.development === 'metropolis') {
               updatedNode.development = 'city';
@@ -224,6 +240,36 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       {isMyTurn && !isCombatPhase && (
         <div className="text-center text-xs text-slate-500 py-3 bg-slate-950/40 border border-slate-900 rounded">
           Combat options disabled: Must be in ATTACK phase
+        </div>
+      )}
+
+      {/* PLANETARY INVASION MODULE */}
+      {isCombatPhase && isMyTurn && (node.isNpcPlanet || (node.claimedBy !== null && node.claimedBy !== myPlayerId)) && (
+        <div className="border border-amber-700/60 bg-amber-950/10 p-3 rounded space-y-2 invasion-pulse">
+          <div className="flex justify-between items-center border-b border-amber-950/60 pb-2">
+            <span className="text-xs font-bold text-amber-400 flex items-center space-x-1.5">
+              <Swords className="h-3.5 w-3.5" />
+              <span>PLANETARY INVASION</span>
+            </span>
+            <span className="text-[10px] text-slate-500">Carrier Troops Required</span>
+          </div>
+          {enemyShipsInOrbit && (
+            <div className="text-[10px] text-red-400/80 bg-red-950/10 border border-red-950/50 p-2 rounded flex items-start space-x-1.5">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              <span>Space must be cleared first. Enemy combat ships are still in orbit.</span>
+            </div>
+          )}
+          {!invadingCarrier && !enemyShipsInOrbit && (
+            <div className="text-[10px] text-slate-500 italic">Move a Carrier carrying at least one ground unit here to invade.</div>
+          )}
+          <button
+            onClick={handleInvadePlanet}
+            disabled={!canInvadePlanet}
+            className="w-full min-h-[44px] py-2.5 bg-red-950/30 border border-red-500 text-red-400 rounded hover:bg-red-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40 scifi-danger-action"
+          >
+            <Crosshair className="h-4 w-4" />
+            <span>Invade Planet</span>
+          </button>
         </div>
       )}
 

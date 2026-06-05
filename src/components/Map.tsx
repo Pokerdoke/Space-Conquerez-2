@@ -463,22 +463,36 @@ export const Map: React.FC<MapProps> = ({
                   planetRadius={planetR}
                 />
 
-                {/* Ground units badge */}
-                {node.groundUnits.length > 0 && (
-                  <g transform={`translate(${-(planetR + 2)}, ${-(planetR + 2)})`}>
-                    <rect x="-6" y="-6" width="12" height="12" fill="#0f172a" stroke="#d97706" strokeWidth="1" rx="2" />
-                    <text
-                      textAnchor="middle"
-                      y="3"
-                      fill="#d97706"
-                      fontSize="8"
-                      fontWeight="bold"
-                      fontFamily="monospace"
-                    >
-                      {node.groundUnits.length}
-                    </text>
-                  </g>
-                )}
+                {/* Ground unit square icons, grouped below the orbital ring */}
+                {node.groundUnits.length > 0 && (() => {
+                  const groups: { owner: string; count: number }[] = [];
+                  node.groundUnits.forEach((unit) => {
+                    const existing = groups.find((g) => g.owner === unit.owner);
+                    if (existing) existing.count += 1;
+                    else groups.push({ owner: unit.owner, count: 1 });
+                  });
+                  const shadeMap: Record<string, string> = {
+                    green: '#34d399', blue: '#60a5fa', purple: '#a78bfa', yellow: '#fbbf24'
+                  };
+                  return (
+                    <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 8})`} pointerEvents="none">
+                      {groups.map((group, idx) => {
+                        const player = gameState.players.find((p) => p.id === group.owner);
+                        const color = group.owner === 'npc' ? '#94a3b8' : shadeMap[player?.color || 'green'];
+                        return (
+                          <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
+                            <rect x="-5" y="-5" width="10" height="10" fill={color} stroke="#020617" strokeWidth="1" rx="1.5" opacity="0.95" />
+                            {group.count > 1 && (
+                              <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6" fontWeight="bold" fontFamily="monospace">
+                                {group.count}
+                              </text>
+                            )}
+                          </g>
+                        );
+                      })}
+                    </g>
+                  );
+                })()}
 
                 {/* Star name */}
                 <text

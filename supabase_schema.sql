@@ -1,35 +1,56 @@
--- SQL Schema Setup for Void Empires
--- Copy and paste this script into your Supabase SQL Editor.
+-- Void Empires multiplayer schema
+-- Run this once in Supabase SQL Editor before deploying.
 
--- 1. Create the rooms table
-CREATE TABLE IF NOT EXISTS public.rooms (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  code VARCHAR(6) UNIQUE NOT NULL,
-  state JSONB NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+create table if not exists public.games (
+  id text primary key,
+  state jsonb not null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  status text default 'lobby' check (status in ('lobby', 'active', 'finished'))
 );
 
--- 2. Enable Row Level Security (RLS) if desired
--- For this simple application, you can allow all read/write actions
--- Or you can disable RLS for testing, or set up policies:
-ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
+create table if not exists public.players (
+  id uuid primary key default gen_random_uuid(),
+  game_id text references public.games(id) on delete cascade,
+  display_name text not null,
+  player_number int check (player_number between 1 and 4),
+  joined_at timestamptz default now(),
+  is_ready boolean default false
+);
 
--- Allow anonymous select (everyone can see rooms)
-CREATE POLICY "Allow anonymous read access" 
-ON public.rooms FOR SELECT 
-USING (true);
+alter table public.games enable row level security;
+alter table public.players enable row level security;
 
--- Allow anonymous insert (everyone can create rooms)
-CREATE POLICY "Allow anonymous insert access" 
-ON public.rooms FOR INSERT 
-WITH CHECK (true);
+do $$ begin
+  create policy "allow all games" on public.games for all using (true) with check (true);
+exception when duplicate_object then null;
+end $$;
 
--- Allow anonymous update (everyone can update rooms they have the code for)
-CREATE POLICY "Allow anonymous update access" 
-ON public.rooms FOR UPDATE 
-USING (true)
-WITH CHECK (true);
+do $$ begin
+  create policy "allow all players" on public.players for all using (true) with check (true);
+exception when duplicate_object then null;
+end $$;
 
--- 3. Enable Supabase Realtime for this table
--- This allows clients to receive instant updates when a room is updated.
-ALTER PUBLICATION supabase_realtime ADD TABLE public.rooms;
+-- Realtime publication. If the table was already added, ignore duplicate_object.
+do $$ begin
+  alter publication supabase_realtime add table public.games;
+exception when duplicate_object then null;
+end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table public.players;
+exception when duplicate_object then null;
+end $$;
+
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_games_updated_at on public.games;
+create trigger set_games_updated_at
+before update on public.games
+for each row execute function public.set_updated_at();

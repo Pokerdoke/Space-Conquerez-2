@@ -2,131 +2,144 @@ import type { GameState, ChatMessage, Player } from '../types';
 import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 import { generateId } from './gameLogic';
 
-// Local storage keys
-const ROOMS_LIST_KEY = 'sc2_rooms_list';
-const getRoomKey = (code: string) => `sc2_room_${code.toUpperCase()}`;
-
-// Broadcaster for local tab-to-tab sync
-const localChannel = new BroadcastChannel('sc2_local_sync');
-
-// Helper to generate a room code
-function generateRoomCode(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
+const ROOMS_LIST_KEY = 'void_empires_rooms_list';
+const PLAYER_ID_KEY = 'void_empires_player_id';
+const PLAYER_NAME_KEY = 'void_empires_player_name';
+const ACTIVE_GAME_KEY = 'void_empires_active_game';
+const getRoomKey = (code: string) => `void_empires_room_${code.toUpperCase()}`;
+const localChannel = new BroadcastChannel('void_empires_local_sync');
 
 export type DbMode = 'local' | 'supabase';
 
+type GameRowStatus = 'lobby' | 'active' | 'finished';
+
+function toGameRowStatus(status: GameState['status']): GameRowStatus {
+  if (status === 'playing') return 'active';
+  if (status === 'completed') return 'finished';
+  return 'lobby';
+}
+
+function randomUuid(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function getLocalPlayerIdentity(preferredName?: string) {
+  let id = localStorage.getItem(PLAYER_ID_KEY);
+  if (!id) {
+    id = randomUuid();
+    localStorage.setItem(PLAYER_ID_KEY, id);
+  }
+
+  let name = preferredName?.trim() || localStorage.getItem(PLAYER_NAME_KEY) || '';
+  if (!name) {
+    name = `StarPilot_${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+  localStorage.setItem(PLAYER_NAME_KEY, name);
+  return { id, name };
+}
+
+export function getSavedPlayerName() {
+  return getLocalPlayerIdentity().name;
+}
+
+function generateRoomCode(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+  return result;
+}
+
+function colorForSlot(slotIndex: number): Player['color'] {
+  return (['green', 'blue', 'purple', 'yellow'] as Player['color'][])[slotIndex] || 'blue';
+}
+
+function makePlayer(id: string, name: string, slotIndex: number, ready: boolean): Player {
+  return {
+    id,
+    uuid: id,
+    playerNumber: slotIndex + 1,
+    name: name || `Player ${slotIndex + 1}`,
+    color: colorForSlot(slotIndex),
+    ready,
+    resources: 20,
+    isNpc: false,
+    homeworldId: ''
+  };
+}
+
+function makeInitialState(code: string, creator: Player, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number): GameState {
+  const now = new Date().toISOString();
+  return {
+    roomId: code,
+    name: `Room ${code}`,
+    creatorId: creator.id,
+    maxPlayers,
+    mapSize,
+    npcCount,
+    status: 'lobby',
+    players: [creator],
+    activePlayerIndex: 0,
+    phase: 0,
+    nodes: [],
+    turnNumber: 1,
+    actionLog: [`Room created by ${creator.name}`],
+    winnerId: null,
+    chat: [],
+    lastUpdated: now,
+    lastAction: 'create_lobby',
+    lastActionAt: now
+  };
+}
+
 export function getDbMode(): DbMode {
-  // Auto-use Supabase when env vars are baked in or user configured it
   if (isSupabaseConfigured()) return 'supabase';
-  const preference = localStorage.getItem('sc2_db_mode');
+  const preference = localStorage.getItem('void_empires_db_mode') || localStorage.getItem('sc2_db_mode');
   return preference === 'supabase' ? 'supabase' : 'local';
 }
 
 export function setDbMode(mode: DbMode) {
-  localStorage.setItem('sc2_db_mode', mode);
+  localStorage.setItem('void_empires_db_mode', mode);
 }
 
-// -------------------------------------------------------------
-// LOCAL MODE ACTIONS
-// -------------------------------------------------------------
 const localDb = {
-  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number): GameState {
+  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number) {
     const code = generateRoomCode();
-    const playerId = 'p1-' + generateId();
-    
-    const creatorPlayer: Player = {
-      id: playerId,
-      name: creatorName || 'Player 1',
-      color: 'green',
-      ready: true,
-      resources: 20,
-      isNpc: false,
-      homeworldId: ''
-    };
-
-    const state: GameState = {
-      roomId: 'local-' + generateId(),
-      name: `Room ${code}`,
-      creatorId: playerId,
-      maxPlayers,
-      mapSize,
-      npcCount,
-      status: 'lobby',
-      players: [creatorPlayer],
-      activePlayerIndex: 0,
-      phase: 0,
-      nodes: [],
-      turnNumber: 1,
-      actionLog: [`Room created by ${creatorPlayer.name}`],
-      winnerId: null,
-      chat: [],
-      lastUpdated: new Date().toISOString()
-    };
-
-    // Save to local storage
+    const identity = getLocalPlayerIdentity(creatorName);
+    const creatorPlayer = makePlayer(identity.id, identity.name, 0, true);
+    const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount);
     localStorage.setItem(getRoomKey(code), JSON.stringify(state));
-    
-    // Add to list of rooms
     const rooms = JSON.parse(localStorage.getItem(ROOMS_LIST_KEY) || '[]');
-    if (!rooms.includes(code)) {
-      rooms.push(code);
-      localStorage.setItem(ROOMS_LIST_KEY, JSON.stringify(rooms));
-    }
-
+    if (!rooms.includes(code)) localStorage.setItem(ROOMS_LIST_KEY, JSON.stringify([...rooms, code]));
+    localStorage.setItem(ACTIVE_GAME_KEY, code);
     localChannel.postMessage({ type: 'UPDATE', code, state });
-    return state;
+    return { code, state };
   },
 
   joinRoom(code: string, playerName: string): GameState {
     const cleanCode = code.trim().toUpperCase();
-    const key = getRoomKey(cleanCode);
-    const data = localStorage.getItem(key);
-    if (!data) {
-      throw new Error(`Room ${cleanCode} not found.`);
-    }
-
-    const state: GameState = JSON.parse(data);
-    
-    // Check if player is already in the game (rejoining)
-    const existingPlayer = state.players.find(p => p.name.trim().toLowerCase() === playerName.trim().toLowerCase());
-    if (existingPlayer) {
+    const data = localStorage.getItem(getRoomKey(cleanCode));
+    if (!data) throw new Error(`Room ${cleanCode} not found.`);
+    const state = JSON.parse(data) as GameState;
+    const identity = getLocalPlayerIdentity(playerName);
+    const existing = state.players.find(p => p.id === identity.id);
+    if (existing) {
+      existing.name = identity.name;
+      localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
+      localDb.updateGameState(cleanCode, state);
       return state;
     }
-
-    if (state.status !== 'lobby') {
-      throw new Error('Game already started.');
-    }
-    if (state.players.length >= state.maxPlayers) {
-      throw new Error('Room is full.');
-    }
-
-    const colors: Player['color'][] = ['blue', 'purple', 'yellow'];
-    const assignedColor = colors[state.players.length - 1] || 'blue';
-    const playerId = `p${state.players.length + 1}-${generateId()}`;
-
-    const newPlayer: Player = {
-      id: playerId,
-      name: playerName || `Player ${state.players.length + 1}`,
-      color: assignedColor,
-      ready: false,
-      resources: 20,
-      isNpc: false,
-      homeworldId: ''
-    };
-
+    if (state.status !== 'lobby') throw new Error('Game already started and this device is not a saved player.');
+    if (state.players.length >= state.maxPlayers) throw new Error('Room is full.');
+    const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false);
     state.players.push(newPlayer);
     state.actionLog.push(`${newPlayer.name} joined the lobby.`);
     state.lastUpdated = new Date().toISOString();
-
-    localStorage.setItem(key, JSON.stringify(state));
-    localChannel.postMessage({ type: 'UPDATE', code: cleanCode, state });
-
+    state.lastAction = 'join_lobby';
+    state.lastActionAt = state.lastUpdated;
+    localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
+    localDb.updateGameState(cleanCode, state);
     return state;
   },
 
@@ -137,9 +150,6 @@ const localDb = {
   }
 };
 
-// -------------------------------------------------------------
-// DUAL-MODE API INTERFACE
-// -------------------------------------------------------------
 export async function createGameRoom(
   creatorName: string,
   maxPlayers: number,
@@ -147,205 +157,123 @@ export async function createGameRoom(
   npcCount: number
 ): Promise<{ code: string; state: GameState }> {
   const mode = getDbMode();
-
   if (mode === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      const code = generateRoomCode();
-      const playerId = 'p1-' + generateId();
-      const creatorPlayer: Player = {
-        id: playerId,
-        name: creatorName || 'Player 1',
-        color: 'green',
-        ready: true,
-        resources: 20,
-        isNpc: false,
-        homeworldId: ''
-      };
-
-      const state: GameState = {
-        roomId: 'sb-' + generateId(),
-        name: `Room ${code}`,
-        creatorId: playerId,
-        maxPlayers,
-        mapSize,
-        npcCount,
-        status: 'lobby',
-        players: [creatorPlayer],
-        activePlayerIndex: 0,
-        phase: 0,
-        nodes: [],
-        turnNumber: 1,
-        actionLog: [`Room created in cloud by ${creatorPlayer.name}`],
-        winnerId: null,
-        chat: [],
-        lastUpdated: new Date().toISOString()
-      };
-
-      const { error } = await client
-        .from('rooms')
-        .insert([{ code, state }]);
-
-      if (error) {
-        console.error('Supabase create room error:', error);
-        throw new Error(error.message);
+      const identity = getLocalPlayerIdentity(creatorName);
+      const creatorPlayer = makePlayer(identity.id, identity.name, 0, true);
+      let code = generateRoomCode();
+      for (let i = 0; i < 4; i++) {
+        const { data } = await client.from('games').select('id').eq('id', code).maybeSingle();
+        if (!data) break;
+        code = generateRoomCode();
       }
+      const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount);
+      const { error } = await client.from('games').insert([{ id: code, state, status: 'lobby' }]);
+      if (error) throw new Error(`Supabase games table error: ${error.message}. Run supabase_schema.sql in the Supabase SQL editor first.`);
+
+      await client.from('players').insert([{ game_id: code, display_name: creatorPlayer.name, player_number: 1, is_ready: true }]);
+      localStorage.setItem(ACTIVE_GAME_KEY, code);
       return { code, state };
     }
   }
-
-  // Local fallback
-  const state = localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount);
-  return { code: state.name.replace('Room ', ''), state };
+  return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount);
 }
 
 export async function joinGameRoom(code: string, playerName: string): Promise<GameState> {
   const mode = getDbMode();
   const cleanCode = code.trim().toUpperCase();
-
   if (mode === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      const { data, error } = await client
-        .from('rooms')
-        .select('*')
-        .eq('code', cleanCode)
-        .single();
-
-      if (error || !data) {
-        console.error('Supabase join room error:', error);
-        throw new Error(`Room ${cleanCode} not found in Cloud.`);
-      }
-
+      const { data, error } = await client.from('games').select('*').eq('id', cleanCode).single();
+      if (error || !data) throw new Error(`Room ${cleanCode} not found.`);
       const state = data.state as GameState;
-
-      // Check if player is already in the game (rejoining)
-      const existingPlayer = state.players.find(p => p.name.trim().toLowerCase() === playerName.trim().toLowerCase());
-      if (existingPlayer) {
+      const identity = getLocalPlayerIdentity(playerName);
+      const existing = state.players.find(p => p.id === identity.id);
+      if (existing) {
+        existing.name = identity.name;
+        state.lastUpdated = new Date().toISOString();
+        await client.from('games').update({ state, updated_at: state.lastUpdated, status: toGameRowStatus(state.status) }).eq('id', cleanCode);
+        localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
         return state;
       }
+      if (state.status !== 'lobby') throw new Error('Game already started and this device is not one of the saved players.');
+      if (state.players.length >= state.maxPlayers) throw new Error('Room is full.');
 
-      if (state.status !== 'lobby') {
-        throw new Error('Game already started.');
-      }
-      if (state.players.length >= state.maxPlayers) {
-        throw new Error('Room is full.');
-      }
-
-      const colors: Player['color'][] = ['blue', 'purple', 'yellow'];
-      const assignedColor = colors[state.players.length - 1] || 'blue';
-      const playerId = `p${state.players.length + 1}-${generateId()}`;
-
-      const newPlayer: Player = {
-        id: playerId,
-        name: playerName || `Player ${state.players.length + 1}`,
-        color: assignedColor,
-        ready: false,
-        resources: 20,
-        isNpc: false,
-        homeworldId: ''
-      };
-
+      const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false);
       state.players.push(newPlayer);
-      state.actionLog.push(`${newPlayer.name} joined lobby (Cloud).`);
-      state.lastUpdated = new Date().toISOString();
+      state.actionLog.push(`${newPlayer.name} joined the lobby.`);
+      state.lastAction = 'join_lobby';
+      state.lastActionAt = new Date().toISOString();
+      state.lastUpdated = state.lastActionAt;
 
       const { error: updateError } = await client
-        .from('rooms')
-        .update({ state, updated_at: new Date().toISOString() })
-        .eq('code', cleanCode);
-
-      if (updateError) {
-        throw new Error(updateError.message);
-      }
-
+        .from('games')
+        .update({ state, updated_at: state.lastUpdated, status: 'lobby' })
+        .eq('id', cleanCode);
+      if (updateError) throw new Error(updateError.message);
+      await client.from('players').insert([{ game_id: cleanCode, display_name: newPlayer.name, player_number: newPlayer.playerNumber, is_ready: false }]);
+      localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
       return state;
     }
   }
-
-  // Local fallback
   return localDb.joinRoom(cleanCode, playerName);
 }
 
 export async function updateRoomState(code: string, state: GameState): Promise<void> {
-  const mode = getDbMode();
   const cleanCode = code.trim().toUpperCase();
-  state.lastUpdated = new Date().toISOString();
+  const stamped: GameState = {
+    ...state,
+    lastUpdated: new Date().toISOString(),
+    lastActionAt: state.lastActionAt || new Date().toISOString()
+  };
 
-  if (mode === 'supabase') {
+  if (getDbMode() === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
       const { error } = await client
-        .from('rooms')
-        .update({ state, updated_at: new Date().toISOString() })
-        .eq('code', cleanCode);
-
-      if (error) {
-        console.error('Supabase update room error:', error);
-        throw new Error(error.message);
-      }
+        .from('games')
+        .update({ state: stamped, updated_at: stamped.lastUpdated, status: toGameRowStatus(stamped.status) })
+        .eq('id', cleanCode);
+      if (error) throw new Error(error.message);
       return;
     }
   }
-
-  // Local fallback
-  localDb.updateGameState(cleanCode, state);
+  localDb.updateGameState(cleanCode, stamped);
 }
 
 export function subscribeToRoom(code: string, onUpdate: (state: GameState) => void): () => void {
-  const mode = getDbMode();
   const cleanCode = code.trim().toUpperCase();
-
-  if (mode === 'supabase') {
+  if (getDbMode() === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      // Set up real-time listener for postgres changes on this specific room
       const channel = client
-        .channel(`room:${cleanCode}`)
+        .channel(`game:${cleanCode}`)
         .on(
           'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'rooms',
-            filter: `code=eq.${cleanCode}`
-          },
-          (payload) => {
-            const newState = payload.new.state as GameState;
-            onUpdate(newState);
-          }
+          { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${cleanCode}` },
+          (payload) => onUpdate(payload.new.state as GameState)
         )
-        .subscribe();
-
-      return () => {
-        client.removeChannel(channel);
-      };
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn('Supabase realtime connection issue:', status);
+          }
+        });
+      return () => { client.removeChannel(channel); };
     }
   }
 
-  // Local mode listeners (BroadcastChannel + LocalStorage Storage event)
   const onBroadcast = (event: MessageEvent) => {
-    if (event.data && event.data.code === cleanCode && event.data.type === 'UPDATE') {
-      onUpdate(event.data.state);
-    }
+    if (event.data?.code === cleanCode && event.data?.type === 'UPDATE') onUpdate(event.data.state);
   };
-
   const onStorageChange = (event: StorageEvent) => {
-    if (event.key === getRoomKey(cleanCode) && event.newValue) {
-      onUpdate(JSON.parse(event.newValue));
-    }
+    if (event.key === getRoomKey(cleanCode) && event.newValue) onUpdate(JSON.parse(event.newValue));
   };
-
   localChannel.addEventListener('message', onBroadcast);
   window.addEventListener('storage', onStorageChange);
-
-  // Trigger an initial read
-  const key = getRoomKey(cleanCode);
-  const data = localStorage.getItem(key);
-  if (data) {
-    onUpdate(JSON.parse(data));
-  }
-
+  const data = localStorage.getItem(getRoomKey(cleanCode));
+  if (data) onUpdate(JSON.parse(data));
   return () => {
     localChannel.removeEventListener('message', onBroadcast);
     window.removeEventListener('storage', onStorageChange);
@@ -353,9 +281,7 @@ export function subscribeToRoom(code: string, onUpdate: (state: GameState) => vo
 }
 
 export async function sendRoomChatMessage(code: string, fromPlayer: Player, text: string): Promise<void> {
-  const mode = getDbMode();
   const cleanCode = code.trim().toUpperCase();
-
   const newMessage: ChatMessage = {
     id: generateId(),
     playerId: fromPlayer.id,
@@ -365,35 +291,26 @@ export async function sendRoomChatMessage(code: string, fromPlayer: Player, text
     timestamp: new Date().toISOString()
   };
 
-  if (mode === 'supabase') {
+  if (getDbMode() === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      // First retrieve the latest state to avoid race conditions
-      const { data, error } = await client
-        .from('rooms')
-        .select('state')
-        .eq('code', cleanCode)
-        .single();
-
-      if (!error && data) {
+      const { data } = await client.from('games').select('state').eq('id', cleanCode).single();
+      if (data) {
         const state = data.state as GameState;
-        state.chat.push(newMessage);
-        
-        await client
-          .from('rooms')
-          .update({ state, updated_at: new Date().toISOString() })
-          .eq('code', cleanCode);
+        state.chat = [...(state.chat || []), newMessage];
+        state.lastAction = 'chat';
+        state.lastActionAt = newMessage.timestamp;
+        state.lastUpdated = newMessage.timestamp;
+        await client.from('games').update({ state, updated_at: state.lastUpdated, status: toGameRowStatus(state.status) }).eq('id', cleanCode);
       }
       return;
     }
   }
 
-  // Local mode
-  const key = getRoomKey(cleanCode);
-  const data = localStorage.getItem(key);
+  const data = localStorage.getItem(getRoomKey(cleanCode));
   if (data) {
-    const state: GameState = JSON.parse(data);
-    state.chat.push(newMessage);
+    const state = JSON.parse(data) as GameState;
+    state.chat = [...(state.chat || []), newMessage];
     localDb.updateGameState(cleanCode, state);
   }
 }

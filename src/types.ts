@@ -1,14 +1,27 @@
 export interface Player {
-  id: string; // "p1", "p2", etc., or custom UUID
+  id: string; // persistent local UUID for human players, or 'npc'
   name: string;
   color: 'green' | 'blue' | 'purple' | 'yellow';
   ready: boolean;
   resources: number;
   isNpc: boolean;
   homeworldId: string;
+  playerNumber?: number;
+  uuid?: string;
 }
 
 export type PlanetDevelopment = 'none' | 'colony' | 'city' | 'metropolis';
+
+export interface GroundUnit {
+  id: string;
+  type: 'GroundUnit';
+  owner: string; // Player.id or 'npc'
+  hp: number;
+  maxHp: number;
+  dmgMin: number;
+  dmgMax: number;
+  turnsInTerritory: number;
+}
 
 export interface Ship {
   id: string;
@@ -22,19 +35,10 @@ export interface Ship {
   blocksMovement: boolean;
   movesLeft: number;
   turnsInTerritory: number;
+  /** Carrier cargo: ground units only. Kept as full objects so HP persists while transported. */
   carriedUnits: GroundUnit[];
+  /** Deprecated legacy field. New carrier rules do not use fighter cargo, but this stays for old saves. */
   carriedFighters: Ship[];
-}
-
-export interface GroundUnit {
-  id: string;
-  type: 'GroundUnit';
-  owner: string; // Player.id
-  hp: number;
-  maxHp: number;
-  dmgMin: number;
-  dmgMax: number;
-  turnsInTerritory: number;
 }
 
 export interface StarNode {
@@ -51,6 +55,8 @@ export interface StarNode {
   hasGateway: boolean;
   ships: Ship[];
   groundUnits: GroundUnit[];
+  /** Cities can build 3 ground units/turn; Metropolises can build 6/turn. Reset each full turn. */
+  groundUnitsBuiltThisTurn: number;
   isNpcPlanet: boolean;
   isDysonSphere: boolean;
 }
@@ -81,6 +87,8 @@ export interface GameState {
   winnerId: string | null;
   chat: ChatMessage[];
   lastUpdated: string;
+  lastAction?: string;
+  lastActionAt?: string;
   turnTimerMinutes?: number; // Optional turn timer
   turnStartedAt?: string; // ISO string when current turn/phase started
 }

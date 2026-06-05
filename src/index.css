@@ -127,3 +127,69 @@ html, body, #root {
   50% { box-shadow: 0 0 16px currentColor; }
 }
 .hud-active-glow { animation: hudPulse 2s ease-in-out infinite; }
+
+/* Mobile/PWA ergonomics and requested button animations */
+button, [role="button"] {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+button:not(:disabled) {
+  transition: transform 80ms ease, box-shadow 160ms ease, opacity 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+@keyframes redPulseGlow {
+  0% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+  50% { box-shadow: 0 0 18px rgba(239, 68, 68, 0.72); }
+  100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+@keyframes greenPulseGlow {
+  0% { box-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+  50% { box-shadow: 0 0 18px rgba(16, 185, 129, 0.72); }
+  100% { box-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.scifi-danger-action:not(:disabled):active,
+button[class*="red"]:not(:disabled):active {
+  animation: redPulseGlow 220ms ease-out;
+}
+
+.scifi-btn-primary:not(:disabled):active,
+button[class*="emerald"]:not(:disabled):active {
+  animation: greenPulseGlow 220ms ease-out;
+}
+
+@keyframes troopDrop {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.invasion-pulse {
+  animation: troopDrop 280ms ease-out both;
+}
+
+@media (max-width: 640px) {
+  header {
+    min-height: 56px !important;
+  }
+
+  .glass-panel {
+    border-radius: 16px 16px 0 0;
+  }
+
+  .scifi-btn {
+    min-height: 44px;
+  }
+}

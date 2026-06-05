@@ -38,18 +38,30 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, onModeC
   };
 
   const copySqlSchema = () => {
-    const sql = `-- SQL Schema Setup for Void Empires
-CREATE TABLE IF NOT EXISTS public.rooms (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  code VARCHAR(6) UNIQUE NOT NULL,
-  state JSONB NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    const sql = `-- Void Empires multiplayer schema
+create table if not exists public.games (
+  id text primary key,
+  state jsonb not null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  status text default 'lobby' check (status in ('lobby', 'active', 'finished'))
 );
-ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read access" ON public.rooms FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert access" ON public.rooms FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous update access" ON public.rooms FOR UPDATE USING (true) WITH CHECK (true);
-ALTER PUBLICATION supabase_realtime ADD TABLE public.rooms;`;
+
+create table if not exists public.players (
+  id uuid primary key default gen_random_uuid(),
+  game_id text references public.games(id) on delete cascade,
+  display_name text not null,
+  player_number int check (player_number between 1 and 4),
+  joined_at timestamptz default now(),
+  is_ready boolean default false
+);
+
+alter table public.games enable row level security;
+alter table public.players enable row level security;
+create policy "allow all games" on public.games for all using (true) with check (true);
+create policy "allow all players" on public.players for all using (true) with check (true);
+alter publication supabase_realtime add table public.games;
+alter publication supabase_realtime add table public.players;`;
 
     navigator.clipboard.writeText(sql);
     setCopied(true);
@@ -152,7 +164,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.rooms;`;
                   </button>
                 </div>
                 <p className="text-[11px] text-slate-500 leading-normal">
-                  You must create the <code className="text-slate-400">rooms</code> table and enable real-time publications on it. Copy the SQL script and run it in the Supabase SQL editor.
+                  You must create the <code className="text-slate-400">games</code> and <code className="text-slate-400">players</code> tables and enable Realtime. The full version is also in supabase_schema.sql.
                 </p>
               </div>
             </div>

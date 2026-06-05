@@ -5,27 +5,34 @@ export interface SupabaseConfig {
   key: string;
 }
 
+const DEFAULT_SUPABASE_URL = 'https://bbmgrpynuqerbgkoasmk.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_z3z7bVxecowgDnU6r0p4SQ_cSxeaJYq';
+
 export function getSupabaseConfig(): SupabaseConfig {
-  // Priority: env vars (baked in) → localStorage (user-configured) → empty
+  const env = import.meta.env;
   const url =
-    (import.meta.env.VITE_SUPABASE_URL as string) ||
+    (env.VITE_SUPABASE_URL as string) ||
+    localStorage.getItem('void_empires_supabase_url') ||
     localStorage.getItem('sc2_supabase_url') ||
-    '';
+    DEFAULT_SUPABASE_URL;
   const key =
-    (import.meta.env.VITE_SUPABASE_ANON_KEY as string) ||
+    (env.VITE_SUPABASE_KEY as string) ||
+    (env.VITE_SUPABASE_ANON_KEY as string) ||
+    localStorage.getItem('void_empires_supabase_key') ||
     localStorage.getItem('sc2_supabase_key') ||
-    '';
+    DEFAULT_SUPABASE_KEY;
   return { url, key };
 }
 
 export function saveSupabaseConfig(url: string, key: string) {
   if (url && key) {
-    localStorage.setItem('sc2_supabase_url', url.trim());
-    localStorage.setItem('sc2_supabase_key', key.trim());
+    localStorage.setItem('void_empires_supabase_url', url.trim());
+    localStorage.setItem('void_empires_supabase_key', key.trim());
   } else {
-    localStorage.removeItem('sc2_supabase_url');
-    localStorage.removeItem('sc2_supabase_key');
+    localStorage.removeItem('void_empires_supabase_url');
+    localStorage.removeItem('void_empires_supabase_key');
   }
+  _client = null;
 }
 
 export function isSupabaseConfigured(): boolean {
@@ -38,10 +45,11 @@ let _client: SupabaseClient<any, 'public', any> | null = null;
 export function getSupabaseClient(): SupabaseClient<any, 'public', any> | null {
   const { url, key } = getSupabaseConfig();
   if (!url || !key) return null;
-  // Reuse singleton to avoid creating a new client on every call
   if (!_client) {
     try {
-      _client = createClient<any, 'public', any>(url, key);
+      _client = createClient<any, 'public', any>(url, key, {
+        realtime: { params: { eventsPerSecond: 10 } }
+      });
     } catch (err) {
       console.error('Error creating Supabase client:', err);
       return null;

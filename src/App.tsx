@@ -8,7 +8,7 @@ import { SoundToggle } from './components/SoundToggle';
 import type { GameState, StarNode, Ship } from './types';
 import { subscribeToRoom, updateRoomState, getDbMode } from './services/database';
 import type { DbMode } from './services/database';
-import { checkWinCondition, getReachableNodes, processHealing, generateMap } from './services/gameLogic';
+import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters } from './services/gameLogic';
 import { audio } from './services/audio';
 import { Sparkles, ArrowRight } from 'lucide-react';
 
@@ -44,6 +44,8 @@ export const App: React.FC = () => {
   const handleGameStart = (code: string, playerId: string) => {
     setCurrentCode(code);
     setMyPlayerId(playerId);
+    localStorage.setItem('void_empires_active_game', code);
+    localStorage.setItem('void_empires_player_id', playerId);
     setView('game');
 
     const unsub = subscribeToRoom(code, (newState) => {
@@ -113,7 +115,9 @@ export const App: React.FC = () => {
         `${gameState.players.find(p => p.id === myPlayerId)?.name}: Moved ${selectedShip.type} to ${
           gameState.nodes.find(n => n.id === targetNodeId)?.name
         } (cost: ${costInMoves})`
-      ]
+      ],
+      lastAction: 'move_ship',
+      lastActionAt: new Date().toISOString()
     };
 
     setSelectedShip(null);
@@ -169,7 +173,10 @@ export const App: React.FC = () => {
       phase: nextPhase as 0 | 1 | 2,
       activePlayerIndex: nextPlayerIndex,
       turnNumber: nextTurnNumber,
+      nodes: gameState.phase === 2 ? resetGroundUnitBuildCounters(gameState.nodes) : gameState.nodes,
       actionLog: [...gameState.actionLog, ...logEntries],
+      lastAction: 'next_phase',
+      lastActionAt: new Date().toISOString(),
       turnStartedAt: new Date().toISOString()
     };
 
@@ -212,6 +219,22 @@ export const App: React.FC = () => {
     audio.playBeep();
     setView('lobby'); setGameState(null); setCurrentCode('');
     setSelectedNode(null); setSelectedShip(null);
+  };
+
+  const handleUpdateGameState = async (updatedState: GameState) => {
+    if (!gameState) return;
+    const active = gameState.players[gameState.activePlayerIndex];
+    if (gameState.status === 'playing' && active?.id !== myPlayerId) {
+      audio.playBeep(160, 0.08);
+      return;
+    }
+    const stamped: GameState = {
+      ...updatedState,
+      lastUpdated: new Date().toISOString(),
+      lastActionAt: updatedState.lastActionAt || new Date().toISOString()
+    };
+    setGameState(stamped);
+    await updateRoomState(currentCode, stamped);
   };
 
   // ───── LOBBY VIEW ─────
@@ -403,9 +426,9 @@ export const App: React.FC = () => {
           ))}
         </div>
 
-        {/* Waiting for turn — non-blocking translucent overlay (bottom banner) */}
+        {/* Waiting for turn — persistent top banner */}
         {!isMyActiveTurn && gameState.status === 'playing' && (
-          <div className="absolute bottom-0 left-0 right-0 z-20 bg-slate-900/90 backdrop-blur-sm border-t border-slate-700/60 px-4 py-2 flex items-center justify-between animate-fadeIn">
+          <div className="absolute top-0 left-0 right-0 z-20 bg-slate-900/90 backdrop-blur-sm border-t border-slate-700/60 px-4 py-2 flex items-center justify-between animate-fadeIn">
             <div className="flex items-center gap-3">
               <div className="w-2 h-2 rounded-full animate-ping" style={{ background: playerColorMap[activePlayer.color] }} />
               <span className="text-xs font-mono text-slate-300">
@@ -446,10 +469,7 @@ export const App: React.FC = () => {
           myPlayerId={myPlayerId}
           selectedShip={selectedShip}
           onSelectShip={setSelectedShip}
-          onUpdateState={(state) => {
-            setGameState(state);
-            updateRoomState(currentCode, state);
-          }}
+          onUpdateState={handleUpdateGameState}
           onClose={() => { setSelectedNode(null); setSelectedShip(null); }}
         />
       )}
