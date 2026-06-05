@@ -264,7 +264,6 @@ export const App: React.FC = () => {
           return count + topLevelGround + carriedGroundCount;
         }, 0);
 
-        const color = playerColorMap[me?.color || 'green'];
 
         return (
           <header className="z-20 flex-shrink-0 w-full bg-slate-900/95 border-b border-slate-700/60 flex items-stretch text-slate-200"

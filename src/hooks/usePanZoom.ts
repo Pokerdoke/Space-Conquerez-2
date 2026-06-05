@@ -26,23 +26,6 @@ export function usePanZoom(
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
 
-  // Zoom toward a point (cx, cy) in screen coordinates
-  const zoomToward = useCallback((cx: number, cy: number, newScale: number) => {
-    setState(prev => {
-      const clampedScale = Math.max(minScale, Math.min(maxScale, newScale));
-      // World point under cursor must stay fixed:
-      // cx = worldX * prevScale + prevPanX  =>  worldX = (cx - prevPanX) / prevScale
-      // cx = worldX * newScale  + newPanX   =>  newPanX = cx - worldX * newScale
-      const worldX = (cx - prev.panX) / prev.scale;
-      const worldY = (cy - prev.panY) / prev.scale;
-      return {
-        panX: cx - worldX * clampedScale,
-        panY: cy - worldY * clampedScale,
-        scale: Number(clampedScale.toFixed(3))
-      };
-    });
-  }, [minScale, maxScale]);
-
   // Mouse wheel zoom toward cursor
   const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
     e.preventDefault();

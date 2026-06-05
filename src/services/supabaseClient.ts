@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export interface SupabaseConfig {
   url: string;
@@ -33,15 +33,15 @@ export function isSupabaseConfigured(): boolean {
   return url.length > 0 && key.length > 0;
 }
 
-let _client: ReturnType<typeof createClient> | null = null;
+let _client: SupabaseClient<any, 'public', any> | null = null;
 
-export function getSupabaseClient() {
+export function getSupabaseClient(): SupabaseClient<any, 'public', any> | null {
   const { url, key } = getSupabaseConfig();
   if (!url || !key) return null;
   // Reuse singleton to avoid creating a new client on every call
   if (!_client) {
     try {
-      _client = createClient(url, key);
+      _client = createClient<any, 'public', any>(url, key);
     } catch (err) {
       console.error('Error creating Supabase client:', err);
       return null;
