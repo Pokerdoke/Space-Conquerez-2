@@ -13,6 +13,17 @@ export type DbMode = 'local' | 'supabase';
 
 type GameRowStatus = 'lobby' | 'active' | 'finished';
 
+export type PublicGameSummary = {
+  code: string;
+  hostName: string;
+  playerCount: number;
+  maxPlayers: number;
+  mapSize: GameState['mapSize'];
+  npcCount: number;
+  isPublic: boolean;
+  updatedAt: string;
+};
+
 function toGameRowStatus(status: GameState['status']): GameRowStatus {
   if (status === 'playing') return 'active';
   if (status === 'completed') return 'finished';
@@ -69,7 +80,14 @@ function makePlayer(id: string, name: string, slotIndex: number, ready: boolean)
   };
 }
 
-function makeInitialState(code: string, creator: Player, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number): GameState {
+function makeInitialState(
+  code: string,
+  creator: Player,
+  maxPlayers: number,
+  mapSize: GameState['mapSize'],
+  npcCount: number,
+  isPublic = true
+): GameState {
   const now = new Date().toISOString();
   return {
     roomId: code,
@@ -78,6 +96,7 @@ function makeInitialState(code: string, creator: Player, maxPlayers: number, map
     maxPlayers,
     mapSize,
     npcCount,
+    isPublic,
     status: 'lobby',
     players: [creator],
     activePlayerIndex: 0,
@@ -93,6 +112,22 @@ function makeInitialState(code: string, creator: Player, maxPlayers: number, map
   };
 }
 
+function summarizePublicGame(code: string, state: GameState, updatedAt?: string): PublicGameSummary | null {
+  if (state.status !== 'lobby') return null;
+  if (state.isPublic === false) return null;
+  if (state.players.length >= state.maxPlayers) return null;
+  return {
+    code: code.toUpperCase(),
+    hostName: state.players[0]?.name || 'Unknown Host',
+    playerCount: state.players.length,
+    maxPlayers: state.maxPlayers,
+    mapSize: state.mapSize,
+    npcCount: state.npcCount,
+    isPublic: true,
+    updatedAt: updatedAt || state.lastUpdated || new Date().toISOString()
+  };
+}
+
 export function getDbMode(): DbMode {
   if (isSupabaseConfigured()) return 'supabase';
   const preference = localStorage.getItem('void_empires_db_mode') || localStorage.getItem('sc2_db_mode');
@@ -104,11 +139,11 @@ export function setDbMode(mode: DbMode) {
 }
 
 const localDb = {
-  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number) {
+  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number, isPublic = true) {
     const code = generateRoomCode();
     const identity = getLocalPlayerIdentity(creatorName);
     const creatorPlayer = makePlayer(identity.id, identity.name, 0, true);
-    const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount);
+    const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic);
     localStorage.setItem(getRoomKey(code), JSON.stringify(state));
     const rooms = JSON.parse(localStorage.getItem(ROOMS_LIST_KEY) || '[]');
     if (!rooms.includes(code)) localStorage.setItem(ROOMS_LIST_KEY, JSON.stringify([...rooms, code]));
@@ -147,6 +182,19 @@ const localDb = {
     const cleanCode = code.toUpperCase();
     localStorage.setItem(getRoomKey(cleanCode), JSON.stringify(state));
     localChannel.postMessage({ type: 'UPDATE', code: cleanCode, state });
+  },
+
+  listPublicRooms(): PublicGameSummary[] {
+    const rooms = JSON.parse(localStorage.getItem(ROOMS_LIST_KEY) || '[]') as string[];
+    return rooms
+      .map(code => {
+        const data = localStorage.getItem(getRoomKey(code));
+        if (!data) return null;
+        const state = JSON.parse(data) as GameState;
+        return summarizePublicGame(code, state);
+      })
+      .filter((room): room is PublicGameSummary => Boolean(room))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 };
 
@@ -154,7 +202,8 @@ export async function createGameRoom(
   creatorName: string,
   maxPlayers: number,
   mapSize: GameState['mapSize'],
-  npcCount: number
+  npcCount: number,
+  isPublic = true
 ): Promise<{ code: string; state: GameState }> {
   const mode = getDbMode();
   if (mode === 'supabase') {
@@ -168,7 +217,7 @@ export async function createGameRoom(
         if (!data) break;
         code = generateRoomCode();
       }
-      const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount);
+      const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic);
       const { error } = await client.from('games').insert([{ id: code, state, status: 'lobby' }]);
       if (error) throw new Error(`Supabase games table error: ${error.message}. Run supabase_schema.sql in the Supabase SQL editor first.`);
 
@@ -177,7 +226,7 @@ export async function createGameRoom(
       return { code, state };
     }
   }
-  return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount);
+  return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount, isPublic);
 }
 
 export async function joinGameRoom(code: string, playerName: string): Promise<GameState> {
@@ -241,6 +290,98 @@ export async function updateRoomState(code: string, state: GameState): Promise<v
     }
   }
   localDb.updateGameState(cleanCode, stamped);
+}
+
+export async function updateLobbySettings(
+  code: string,
+  currentState: GameState,
+  actorPlayerId: string,
+  changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'npcCount' | 'isPublic'>>
+): Promise<GameState> {
+  if (currentState.status !== 'lobby') throw new Error('Settings can only be changed before the game starts.');
+  if (currentState.creatorId !== actorPlayerId) throw new Error('Only the host can change lobby settings.');
+
+  const nextMaxPlayers = changes.maxPlayers ?? currentState.maxPlayers;
+  if (nextMaxPlayers < currentState.players.length) {
+    throw new Error(`Cannot lower slots below ${currentState.players.length} joined player(s).`);
+  }
+
+  const updatedState: GameState = {
+    ...currentState,
+    ...changes,
+    maxPlayers: nextMaxPlayers,
+    lastAction: 'lobby_settings',
+    lastActionAt: new Date().toISOString(),
+    actionLog: [
+      ...currentState.actionLog,
+      `Lobby settings updated: ${nextMaxPlayers} players, ${changes.mapSize ?? currentState.mapSize} map, ${changes.npcCount ?? currentState.npcCount} NPC systems, ${(changes.isPublic ?? currentState.isPublic !== false) ? 'public' : 'private'}.`
+    ]
+  };
+
+  await updateRoomState(code, updatedState);
+  return updatedState;
+}
+
+export async function listPublicGameRooms(): Promise<PublicGameSummary[]> {
+  if (getDbMode() === 'supabase') {
+    const client = getSupabaseClient();
+    if (client) {
+      const { data, error } = await client
+        .from('games')
+        .select('id,state,updated_at,status')
+        .eq('status', 'lobby')
+        .order('updated_at', { ascending: false })
+        .limit(30);
+      if (error) throw new Error(error.message);
+      return (data || [])
+        .map((row: any) => summarizePublicGame(row.id, row.state as GameState, row.updated_at))
+        .filter((room: PublicGameSummary | null): room is PublicGameSummary => Boolean(room));
+    }
+  }
+  return localDb.listPublicRooms();
+}
+
+export function subscribeToPublicGameRooms(onUpdate: (rooms: PublicGameSummary[]) => void): () => void {
+  let cancelled = false;
+  const refresh = async () => {
+    try {
+      const rooms = await listPublicGameRooms();
+      if (!cancelled) onUpdate(rooms);
+    } catch (error) {
+      console.warn('Failed to refresh public rooms:', error);
+      if (!cancelled) onUpdate([]);
+    }
+  };
+
+  void refresh();
+
+  if (getDbMode() === 'supabase') {
+    const client = getSupabaseClient();
+    if (client) {
+      const channel = client
+        .channel('public-lobbies')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'games' }, () => {
+          void refresh();
+        })
+        .subscribe();
+      return () => {
+        cancelled = true;
+        client.removeChannel(channel);
+      };
+    }
+  }
+
+  const onBroadcast = () => { void refresh(); };
+  const onStorageChange = (event: StorageEvent) => {
+    if (event.key === ROOMS_LIST_KEY || event.key?.startsWith('void_empires_room_')) void refresh();
+  };
+  localChannel.addEventListener('message', onBroadcast);
+  window.addEventListener('storage', onStorageChange);
+  return () => {
+    cancelled = true;
+    localChannel.removeEventListener('message', onBroadcast);
+    window.removeEventListener('storage', onStorageChange);
+  };
 }
 
 export function subscribeToRoom(code: string, onUpdate: (state: GameState) => void): () => void {

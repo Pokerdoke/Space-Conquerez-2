@@ -77,6 +77,8 @@ export interface GameState {
   maxPlayers: number;
   mapSize: 'small' | 'medium' | 'large';
   npcCount: number;
+  /** True when the lobby appears in the public games browser. */
+  isPublic?: boolean;
   status: 'lobby' | 'playing' | 'completed';
   players: Player[];
   activePlayerIndex: number; // Index in the players array
