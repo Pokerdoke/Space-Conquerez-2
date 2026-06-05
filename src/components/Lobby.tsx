@@ -4,6 +4,7 @@ import { createGameRoom, joinGameRoom, updateRoomState, getSavedPlayerName } fro
 import { generateMap } from '../services/gameLogic';
 import { Users, Copy, Check, ShieldAlert, Play, ArrowRight, Settings, GraduationCap } from 'lucide-react';
 import { Tutorial } from './Tutorial';
+import type { TutorialScenarioId } from '../services/tutorialScenarios';
 import { audio } from '../services/audio';
 
 
@@ -11,9 +12,10 @@ interface LobbyProps {
   onGameStart: (code: string, myPlayerId: string) => void;
   onOpenSettings: () => void;
   dbMode: 'local' | 'supabase';
+  onStartTutorialScenario: (scenarioId: TutorialScenarioId) => void;
 }
 
-export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode }) => {
+export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode, onStartTutorialScenario }) => {
   // Lobby Navigation State: 'welcome' | 'create' | 'join' | 'waiting'
   const [view, setView] = useState<'welcome' | 'create' | 'join' | 'waiting' | 'tutorial'>('welcome');
   const [playerName, setPlayerName] = useState(() => getSavedPlayerName());
@@ -315,7 +317,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
 
         {/* TUTORIAL VIEW */}
         {view === 'tutorial' && (
-          <Tutorial onExit={() => { audio.playBeep(); setView('welcome'); }} />
+          <Tutorial onExit={() => { audio.playBeep(); setView('welcome'); }} onStartScenario={onStartTutorialScenario} />
         )}
 
         {/* CREATE VIEW */}

@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, Flag, Rocket, Factory, Crosshair, Shield, RadioTower, Lightbulb, X, CheckCircle2 } from 'lucide-react';
 import { audio } from '../services/audio';
+import type { TutorialScenarioId } from '../services/tutorialScenarios';
 
 interface TutorialProps {
   onExit: () => void;
+  onStartScenario?: (scenarioId: TutorialScenarioId) => void;
 }
 
 type TutorialLevel = {
-  id: string;
+  id: TutorialScenarioId;
   title: string;
   subtitle: string;
   icon: React.ReactNode;
@@ -79,7 +81,7 @@ const tutorialLevels: TutorialLevel[] = [
     success: 'You win this lesson when the planet becomes a City and at least one friendly ground unit appears on the node.',
     tips: [
       'Higher development increases resource generation every turn.',
-      'Build Shipyards on key planets so new ships can be produced near the front while damaged forces recover safely in friendly territory.'
+      'Build Shipyards on key planets so new ships can be produced near the front and damaged ships or troops can repair to full in one friendly turn.'
     ]
   },
   {
@@ -138,7 +140,7 @@ const tutorialLevels: TutorialLevel[] = [
       'Place combat ships there. Destroyers, Battleships, and Carriers stop enemy ships from moving through the system.',
       'Build an FTL Inhibitor structure on important planets for a permanent blocker while you own the planet.',
       'Remember: enemies may enter an inhibited system, but cannot pass through it until the planet is captured.',
-      'Build Shipyards near the front so reinforcements do not travel as far, then rotate damaged ships and troops into friendly systems to heal over 2 turns.',
+      'Build Shipyards near the front so reinforcements do not travel as far. Damaged ships and troops repair to full in one turn at a Shipyard, or recover over about 2–3 turns in friendly territory without one.',
       'Use carriers to carry up to 3 ground troops, clear orbit first, then invade during the Action phase.'
     ],
     success: 'You win this lesson when your fleet holds the chokepoint and your Carrier captures the target planet behind it.',
@@ -149,7 +151,7 @@ const tutorialLevels: TutorialLevel[] = [
   }
 ];
 
-export const Tutorial: React.FC<TutorialProps> = ({ onExit }) => {
+export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) => {
   const [levelIndex, setLevelIndex] = useState(0);
   const [completed, setCompleted] = useState<Record<string, boolean>>({});
   const level = tutorialLevels[levelIndex];
@@ -256,7 +258,18 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit }) => {
                 <div className="absolute right-8 top-7 text-xs">🛡️</div>
                 <div className="absolute left-24 bottom-5 text-xs">⬛⬛</div>
               </div>
-              <p className="relative text-[10px] font-mono uppercase tracking-wider text-slate-500 text-center">Scenario preview</p>
+              <div className="relative space-y-3 text-center">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Playable scenario</p>
+                {onStartScenario && (
+                  <button
+                    onClick={() => { audio.playVictory(); onStartScenario(level.id); }}
+                    className="scifi-btn scifi-btn-secondary px-3 py-2 text-xs inline-flex items-center gap-2"
+                  >
+                    <Rocket className="h-4 w-4" />
+                    Launch Lesson
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -299,7 +312,16 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit }) => {
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
-          <button onClick={markComplete} className="scifi-btn scifi-btn-primary px-3 py-2 flex items-center gap-2">
+          {onStartScenario && (
+            <button
+              onClick={() => { audio.playVictory(); onStartScenario(level.id); }}
+              className="scifi-btn scifi-btn-primary px-3 py-2 flex items-center gap-2"
+            >
+              <Rocket className="h-4 w-4" />
+              Play Scenario
+            </button>
+          )}
+          <button onClick={markComplete} className="scifi-btn px-3 py-2 flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
             Mark Done
           </button>

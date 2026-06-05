@@ -91,4 +91,11 @@ export interface GameState {
   lastActionAt?: string;
   turnTimerMinutes?: number; // Optional turn timer
   turnStartedAt?: string; // ISO string when current turn/phase started
+  tutorialScenario?: {
+    id: string;
+    title: string;
+    objective: string;
+    steps: string[];
+  };
 }
+

@@ -10,14 +10,17 @@ import { subscribeToRoom, updateRoomState, getDbMode } from './services/database
 import type { DbMode } from './services/database';
 import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters } from './services/gameLogic';
 import { audio } from './services/audio';
+import { createTutorialScenario, TUTORIAL_PLAYER_ID } from './services/tutorialScenarios';
+import type { TutorialScenarioId } from './services/tutorialScenarios';
 import { Sparkles, ArrowRight } from 'lucide-react';
 
 
 export const App: React.FC = () => {
-  const [view, setView] = useState<'lobby' | 'game'>('lobby');
+  const [view, setView] = useState<'lobby' | 'game' | 'tutorialGame'>('lobby');
   const [currentCode, setCurrentCode] = useState('');
   const [myPlayerId, setMyPlayerId] = useState('');
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const isTutorialMode = view === 'tutorialGame';
 
   // Game UI State
   const [selectedNode, setSelectedNode] = useState<StarNode | null>(null);
@@ -140,7 +143,9 @@ export const App: React.FC = () => {
     setSelectedShip(null);
     setGameState(updatedState);
     refreshSelectionsFromState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    if (!isTutorialMode) {
+      await updateRoomState(currentCode, updatedState);
+    }
   };
 
   // Phase & Turn advancement
@@ -201,7 +206,9 @@ export const App: React.FC = () => {
     setSelectedShip(null);
     setGameState(updatedState);
     refreshSelectionsFromState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    if (!isTutorialMode) {
+      await updateRoomState(currentCode, updatedState);
+    }
   };
 
   const handlePlayAgain = async () => {
@@ -218,7 +225,9 @@ export const App: React.FC = () => {
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    if (!isTutorialMode) {
+      await updateRoomState(currentCode, updatedState);
+    }
   };
 
   const handleReturnToLobby = async () => {
@@ -231,7 +240,9 @@ export const App: React.FC = () => {
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    if (!isTutorialMode) {
+      await updateRoomState(currentCode, updatedState);
+    }
   };
 
   const handleReturnToMainLobby = () => {
@@ -254,14 +265,28 @@ export const App: React.FC = () => {
     };
     setGameState(stamped);
     refreshSelectionsFromState(stamped);
-    await updateRoomState(currentCode, stamped);
+    if (!isTutorialMode) {
+      await updateRoomState(currentCode, stamped);
+    }
+  };
+
+  const handleStartTutorialScenario = (scenarioId: TutorialScenarioId) => {
+    audio.playVictory();
+    const scenarioState = createTutorialScenario(scenarioId);
+    setCurrentCode(scenarioState.roomId);
+    setMyPlayerId(TUTORIAL_PLAYER_ID);
+    setGameState(scenarioState);
+    setSelectedNode(scenarioState.nodes[0] || null);
+    setSelectedShip(null);
+    setReachableNodes({});
+    setView('tutorialGame');
   };
 
   // ───── LOBBY VIEW ─────
   if (view === 'lobby' || !gameState) {
     return (
       <>
-        <Lobby onGameStart={handleGameStart} onOpenSettings={() => setIsSettingsOpen(true)} dbMode={dbMode} />
+        <Lobby onGameStart={handleGameStart} onOpenSettings={() => setIsSettingsOpen(true)} dbMode={dbMode} onStartTutorialScenario={handleStartTutorialScenario} />
         {isSettingsOpen && (
           <SettingsDialog onClose={() => setIsSettingsOpen(false)} onModeChanged={handleSettingsChanged} />
         )}
@@ -437,6 +462,22 @@ export const App: React.FC = () => {
           onMoveShip={handleMoveShip}
           fogOfWarEnabled={fogOfWar}
         />
+
+        {isTutorialMode && gameState.tutorialScenario && (
+          <div className="absolute top-0 left-0 right-0 z-20 bg-cyan-950/90 backdrop-blur-sm border-b border-cyan-500/40 px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 animate-fadeIn">
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-300">Tutorial Scenario</div>
+              <div className="text-sm font-bold text-slate-100">{gameState.tutorialScenario.title}</div>
+              <div className="text-xs text-slate-300">{gameState.tutorialScenario.objective}</div>
+            </div>
+            <button
+              onClick={handleReturnToMainLobby}
+              className="scifi-btn scifi-btn-danger px-3 py-2 text-xs shrink-0"
+            >
+              Exit Tutorial
+            </button>
+          </div>
+        )}
 
         {/* In-Game log console (top-left corner, desktop only) */}
         <div className="absolute left-3 top-3 z-10 w-56 max-h-32 bg-slate-900/80 border border-slate-700/60 rounded p-2 overflow-y-auto text-[9px] font-mono text-slate-400 space-y-0.5 pointer-events-auto shadow-lg hidden md:block backdrop-blur-sm">

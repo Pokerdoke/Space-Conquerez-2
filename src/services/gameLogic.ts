@@ -21,7 +21,8 @@ export const SHIP_STATS = {
 };
 
 export const GROUND_UNIT_STATS = { cost: 3, hp: 10, dmgMin: 1, dmgMax: 4 };
-export const UNIT_HEAL_TURNS = 2;
+export const SHIPYARD_HEAL_TURNS = 1;
+export const FRIENDLY_TERRITORY_HEAL_TURNS = 3;
 
 type HealableUnit = {
   hp: number;
@@ -29,7 +30,7 @@ type HealableUnit = {
   turnsInTerritory: number;
 };
 
-function healUnitOneTurn(unit: HealableUnit): number {
+function healUnitOneTurn(unit: HealableUnit, hasShipyard: boolean): number {
   if (unit.hp >= unit.maxHp) {
     unit.turnsInTerritory = 0;
     return 0;
@@ -37,10 +38,16 @@ function healUnitOneTurn(unit: HealableUnit): number {
 
   const before = unit.hp;
   unit.turnsInTerritory += 1;
-  // All damaged ships and ground troops heal every friendly turn.
-  // A unit heals half of its max HP each turn, so even a 1 HP survivor is full after 2 turns.
-  const healAmount = Math.ceil(unit.maxHp / UNIT_HEAL_TURNS);
-  unit.hp = Math.min(unit.maxHp, unit.hp + healAmount);
+
+  // Shipyards fully repair ships and ground troops in one friendly turn.
+  // Friendly territory without a shipyard repairs slower: heavy damage usually takes 3 turns,
+  // while lighter damage often takes 2 turns.
+  if (hasShipyard) {
+    unit.hp = unit.maxHp;
+  } else {
+    const healAmount = Math.ceil(unit.maxHp / FRIENDLY_TERRITORY_HEAL_TURNS);
+    unit.hp = Math.min(unit.maxHp, unit.hp + healAmount);
+  }
 
   if (unit.hp >= unit.maxHp) {
     unit.turnsInTerritory = 0;
@@ -407,8 +414,9 @@ export function getReachableNodes(
 }
 
 // Heal units in friendly territory.
-// Every damaged ship and ground troop heals each owner turn in friendly territory.
-// Healing is +50% max HP per turn, so any damaged unit is full after 2 friendly turns at most.
+// Shipyards repair damaged ships and ground troops to full in one friendly turn.
+// Friendly territory without a shipyard repairs more slowly: heavy damage usually takes 3 turns,
+// while lighter damage often takes 2 turns.
 // Ground troops carried inside carriers heal too while the carrier is parked in friendly territory.
 export function processHealing(nodes: StarNode[], activePlayerId: string): string[] {
   const log: string[] = [];
@@ -434,11 +442,11 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
     for (const ship of node.ships) {
       if (ship.owner !== activePlayerId) continue;
 
-      const shipHealed = healUnitOneTurn(ship);
+      const shipHealed = healUnitOneTurn(ship, node.hasShipyard);
       if (shipHealed > 0) {
         log.push(
           ship.hp >= ship.maxHp
-            ? `${ship.type} healed to full at ${node.name}.`
+            ? `${ship.type} ${node.hasShipyard ? 'repaired to full at the Shipyard' : 'healed to full'} at ${node.name}.`
             : `${ship.type} recovered +${shipHealed} HP at ${node.name}.`
         );
       }
@@ -446,11 +454,11 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
       // Heal legacy carried fighters.
       for (const fighter of ship.carriedFighters) {
         if (fighter.owner !== activePlayerId) continue;
-        const fighterHealed = healUnitOneTurn(fighter);
+        const fighterHealed = healUnitOneTurn(fighter, node.hasShipyard);
         if (fighterHealed > 0) {
           log.push(
             fighter.hp >= fighter.maxHp
-              ? `Fighter carried by Carrier healed to full at ${node.name}.`
+              ? `Fighter carried by Carrier ${node.hasShipyard ? 'repaired to full at the Shipyard' : 'healed to full'} at ${node.name}.`
               : `Fighter carried by Carrier recovered +${fighterHealed} HP at ${node.name}.`
           );
         }
@@ -459,11 +467,11 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
       // Heal carried ground units while the carrier is in friendly territory.
       for (const carried of ship.carriedUnits) {
         if (carried.owner !== activePlayerId) continue;
-        const healed = healUnitOneTurn(carried);
+        const healed = healUnitOneTurn(carried, node.hasShipyard);
         if (healed > 0) {
           log.push(
             carried.hp >= carried.maxHp
-              ? `Ground Unit carried by ${ship.type} healed to full at ${node.name}.`
+              ? `Ground Unit carried by ${ship.type} ${node.hasShipyard ? 'repaired to full at the Shipyard' : 'healed to full'} at ${node.name}.`
               : `Ground Unit carried by ${ship.type} recovered +${healed} HP at ${node.name}.`
           );
         }
@@ -473,11 +481,11 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
     // Process friendly ground units on the planet surface.
     for (const gu of node.groundUnits) {
       if (gu.owner !== activePlayerId) continue;
-      const healed = healUnitOneTurn(gu);
+      const healed = healUnitOneTurn(gu, node.hasShipyard);
       if (healed > 0) {
         log.push(
           gu.hp >= gu.maxHp
-            ? `Ground Unit healed to full at ${node.name}.`
+            ? `Ground Unit ${node.hasShipyard ? 'repaired to full at the Shipyard' : 'healed to full'} at ${node.name}.`
             : `Ground Unit recovered +${healed} HP at ${node.name}.`
         );
       }
