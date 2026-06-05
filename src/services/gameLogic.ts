@@ -1,4 +1,4 @@
-import type { GameState, StarNode, Ship, GroundUnit, Player, PlanetDevelopment } from '../types';
+import type { GameState, StarNode, Ship, GroundUnit, Player, PlanetDevelopment, PlanetBiome } from '../types';
 
 // Sci-Fi Names for Nodes
 const STAR_NAMES = [
@@ -21,6 +21,13 @@ export const SHIP_STATS = {
 };
 
 export const GROUND_UNIT_STATS = { cost: 3, hp: 10, dmgMin: 1, dmgMax: 4 };
+
+const PLANET_BIOMES: PlanetBiome[] = ['ocean', 'tropical', 'continental', 'savannah', 'desert', 'arid', 'tundra', 'alpine', 'arctic', 'gas', 'rock'];
+
+function pickBiome(index: number, isSpecial = false): PlanetBiome {
+  if (isSpecial) return 'rock';
+  return PLANET_BIOMES[index % PLANET_BIOMES.length];
+}
 export const SHIPYARD_HEAL_TURNS = 1;
 export const FRIENDLY_TERRITORY_HEAL_TURNS = 3;
 
@@ -160,7 +167,8 @@ export function createShip(type: Ship['type'], owner: string): Ship {
     movesLeft: type === 'Fighter' ? 0 : 6,
     turnsInTerritory: 0,
     carriedUnits: [],
-    carriedFighters: []
+    carriedFighters: [],
+    lastNodeId: null
   };
 }
 
@@ -243,7 +251,8 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
         groundUnits: [],
         groundUnitsBuiltThisTurn: 0,
         isNpcPlanet: false,
-        isDysonSphere: false
+        isDysonSphere: false,
+        biome: pickBiome(nameIndex)
       });
       nameIndex++;
     }
@@ -357,6 +366,7 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
   if (centerNode) {
     centerNode.name = 'Dyson Prime';
     centerNode.isDysonSphere = true;
+    centerNode.biome = 'gas';
     centerNode.resourceGeneration = 15;
     // Guarded by high NPC force
     centerNode.ships = [createShip('BattleShip', 'npc')];
@@ -411,8 +421,11 @@ export function getReachableNodes(
   const nodeMap = new Map<string, StarNode>(nodes.map(n => [n.id, n]));
   const startNode = nodeMap.get(startNodeId);
   if (startNode && (hasEnemyCombatShips(startNode, playerId, state) || hasEnemyFtlInhibitor(startNode, playerId, state))) {
-    // If you are sitting in an enemy/hostile FTL inhibitor system, you can enter it but cannot move through or out
-    // until the inhibitor ships are destroyed or the planet is captured/allied.
+    // You may retreat only to the immediately previous system you came from.
+    const retreatTargetId = ship.lastNodeId ?? null;
+    if (retreatTargetId && startNode.links.includes(retreatTargetId)) {
+      return { [retreatTargetId]: 1 };
+    }
     return {};
   }
   

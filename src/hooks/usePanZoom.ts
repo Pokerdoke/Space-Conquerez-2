@@ -1,12 +1,9 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 
 interface PanZoomState {
   panX: number;
   panY: number;
   scale: number;
-  /** Background parallax follows manual panning only, not wheel/pinch zoom corrections. */
-  parallaxX: number;
-  parallaxY: number;
 }
 
 export function usePanZoom(
@@ -14,73 +11,20 @@ export function usePanZoom(
   maxScale = 3.0,
   initialPanX = 0,
   initialPanY = 0,
-  initialScale = 0.8,
-  centerWorldX?: number,
-  centerWorldY?: number
+  initialScale = 0.8
 ) {
   const [state, setState] = useState<PanZoomState>({
     panX: initialPanX,
     panY: initialPanY,
-    scale: initialScale,
-    parallaxX: initialPanX,
-    parallaxY: initialPanY
+    scale: initialScale
   });
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const hasAutoCentered = useRef(false);
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
-  const frameRef = useRef<number | null>(null);
-  const pendingStateRef = useRef<Partial<PanZoomState> | null>(null);
-
-  const scheduleState = useCallback((partial: Partial<PanZoomState>) => {
-    pendingStateRef.current = { ...(pendingStateRef.current || {}), ...partial };
-    if (frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
-      const pending = pendingStateRef.current;
-      pendingStateRef.current = null;
-      if (pending) setState(prev => ({ ...prev, ...pending }));
-    });
-  }, []);
-
-  useEffect(() => () => {
-    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
-  }, []);
-
-  const getCenteredState = useCallback((scaleValue = initialScale): PanZoomState => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (rect && centerWorldX !== undefined && centerWorldY !== undefined) {
-      const panX = rect.width / 2 - centerWorldX * scaleValue;
-      const panY = rect.height / 2 - centerWorldY * scaleValue;
-      return {
-        panX,
-        panY,
-        scale: scaleValue,
-        parallaxX: panX,
-        parallaxY: panY
-      };
-    }
-    return {
-      panX: initialPanX,
-      panY: initialPanY,
-      scale: scaleValue,
-      parallaxX: initialPanX,
-      parallaxY: initialPanY
-    };
-  }, [centerWorldX, centerWorldY, initialPanX, initialPanY, initialScale]);
-
-  useLayoutEffect(() => {
-    if (hasAutoCentered.current || centerWorldX === undefined || centerWorldY === undefined) return;
-    const frame = window.requestAnimationFrame(() => {
-      hasAutoCentered.current = true;
-      setState(getCenteredState(initialScale));
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [centerWorldX, centerWorldY, getCenteredState, initialScale]);
 
   // Mouse wheel zoom toward cursor
   const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
@@ -95,7 +39,6 @@ export function usePanZoom(
       const worldX = (cx - prev.panX) / prev.scale;
       const worldY = (cy - prev.panY) / prev.scale;
       return {
-        ...prev,
         panX: cx - worldX * newScale,
         panY: cy - worldY * newScale,
         scale: Number(newScale.toFixed(3))
@@ -141,20 +84,18 @@ export function usePanZoom(
     if (!isDragging.current) return;
     const dx = clientX - dragStart.current.x;
     const dy = clientY - dragStart.current.y;
-    scheduleState({
+    setState(prev => ({
+      ...prev,
       panX: panStart.current.x + dx,
-      panY: panStart.current.y + dy,
-      parallaxX: panStart.current.x + dx,
-      parallaxY: panStart.current.y + dy
-    });
-  }, [scheduleState]);
+      panY: panStart.current.y + dy
+    }));
+  }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     handleMove(e.clientX, e.clientY);
   }, [handleMove]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
-    if (e.cancelable) e.preventDefault();
     if (e.touches.length === 1 && isDragging.current) {
       handleMove(e.touches[0].clientX, e.touches[0].clientY);
     } else if (e.touches.length === 2 && lastTouchDist.current !== null) {
@@ -176,7 +117,6 @@ export function usePanZoom(
         const worldX = (mid.x - prev.panX) / prev.scale;
         const worldY = (mid.y - prev.panY) / prev.scale;
         return {
-          ...prev,
           panX: mid.x - worldX * newScale,
           panY: mid.y - worldY * newScale,
           scale: Number(newScale.toFixed(3))
@@ -191,8 +131,8 @@ export function usePanZoom(
   }, []);
 
   const reset = useCallback(() => {
-    setState(getCenteredState(initialScale));
-  }, [getCenteredState, initialScale]);
+    setState({ panX: initialPanX, panY: initialPanY, scale: initialScale });
+  }, [initialPanX, initialPanY, initialScale]);
 
   return {
     ...state,

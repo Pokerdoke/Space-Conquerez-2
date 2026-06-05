@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { GameState, StarNode, Ship, PlanetDevelopment } from '../types';
+import React, { useEffect, useMemo, useRef } from 'react';
+import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
 
@@ -14,325 +14,237 @@ interface MapProps {
   fogOfWarEnabled: boolean;
 }
 
-type PlanetBiome = 'ice' | 'lava' | 'jungle' | 'ocean' | 'desert' | 'gas' | 'dead';
-
-type PlanetVisual = {
-  biome: PlanetBiome;
-  gradient: [string, string, string];
-  accent: string;
-  shadow: string;
-};
-
-const PLANET_VISUALS: Record<PlanetBiome, PlanetVisual> = {
-  ice: {
-    biome: 'ice',
-    gradient: ['#f8fafc', '#a5f3fc', '#1e3a8a'],
-    accent: '#dff7ff',
-    shadow: 'rgba(125, 211, 252, 0.35)',
-  },
-  lava: {
-    biome: 'lava',
-    gradient: ['#fed7aa', '#f97316', '#450a0a'],
-    accent: '#ef4444',
-    shadow: 'rgba(249, 115, 22, 0.35)',
-  },
-  jungle: {
-    biome: 'jungle',
-    gradient: ['#bbf7d0', '#15803d', '#052e16'],
-    accent: '#86efac',
-    shadow: 'rgba(34, 197, 94, 0.32)',
-  },
-  ocean: {
-    biome: 'ocean',
-    gradient: ['#e0f2fe', '#0284c7', '#0f172a'],
-    accent: '#f8fafc',
-    shadow: 'rgba(14, 165, 233, 0.32)',
-  },
-  desert: {
-    biome: 'desert',
-    gradient: ['#fde68a', '#d97706', '#78350f'],
-    accent: '#fed7aa',
-    shadow: 'rgba(217, 119, 6, 0.32)',
-  },
-  gas: {
-    biome: 'gas',
-    gradient: ['#fce7f3', '#93c5fd', '#4c1d95'],
-    accent: '#f0abfc',
-    shadow: 'rgba(192, 132, 252, 0.32)',
-  },
-  dead: {
-    biome: 'dead',
-    gradient: ['#cbd5e1', '#64748b', '#111827'],
-    accent: '#94a3b8',
-    shadow: 'rgba(148, 163, 184, 0.28)',
-  },
-};
-
-const playerColors: Record<string, string> = {
+const PLAYER_COLORS: Record<string, string> = {
   green: '#10b981',
   blue: '#3b82f6',
   purple: '#8b5cf6',
   yellow: '#f59e0b',
 };
 
-const groundShadeMap: Record<string, string> = {
-  green: '#34d399',
-  blue: '#60a5fa',
-  purple: '#a78bfa',
-  yellow: '#fbbf24',
-};
+const BIOMES: PlanetBiome[] = [
+  'ocean',
+  'tropical',
+  'continental',
+  'savannah',
+  'desert',
+  'arid',
+  'tundra',
+  'alpine',
+  'arctic',
+  'gas',
+  'rock',
+];
 
-const developmentRadius: Record<PlanetDevelopment, number> = {
-  none: 16,
-  colony: 17,
-  city: 18,
-  metropolis: 19,
-  arcology: 20,
-  coreworld: 21,
-};
-
-const hashString = (value: string) => {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
   }
-  return hash >>> 0;
-};
+  return Math.abs(hash);
+}
 
-const mulberry32 = (seed: number) => {
-  let a = seed >>> 0;
-  return () => {
-    a += 0x6D2B79F5;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+function getBiome(node: StarNode): PlanetBiome {
+  if (node.isDysonSphere) return 'gas';
+  return node.biome ?? BIOMES[hashString(node.id) % BIOMES.length];
+}
 
-const getPlanetVisual = (node: StarNode): PlanetVisual => {
-  if (node.isDysonSphere) return PLANET_VISUALS.gas;
-  const biomes: PlanetBiome[] = ['ice', 'lava', 'jungle', 'ocean', 'desert', 'gas', 'dead'];
-  return PLANET_VISUALS[biomes[hashString(`${node.id}-${node.name}`) % biomes.length]];
-};
+function getBiomePalette(biome: PlanetBiome) {
+  switch (biome) {
+    case 'ocean':
+      return { base: '#3a86c6', secondary: '#86d1ff', accent: '#d9f4ff', cloud: '#ffffff', city: '#93c5fd' };
+    case 'tropical':
+      return { base: '#2a6db0', secondary: '#34b77d', accent: '#b7f0cf', cloud: '#ecfeff', city: '#86efac' };
+    case 'continental':
+      return { base: '#53715a', secondary: '#9f8f69', accent: '#d8d1bb', cloud: '#f8fafc', city: '#cbd5e1' };
+    case 'savannah':
+      return { base: '#99673e', secondary: '#d59b57', accent: '#f7d998', cloud: '#fff7e6', city: '#fde68a' };
+    case 'desert':
+      return { base: '#b9854d', secondary: '#e3bc76', accent: '#f8e2b5', cloud: '#fff1d6', city: '#fdba74' };
+    case 'arid':
+      return { base: '#b99b74', secondary: '#d8be94', accent: '#efe0bb', cloud: '#fff6df', city: '#fcd34d' };
+    case 'tundra':
+      return { base: '#667a6f', secondary: '#b7c5a8', accent: '#ecf4d6', cloud: '#ffffff', city: '#d9f99d' };
+    case 'alpine':
+      return { base: '#9f89a4', secondary: '#d8bfd8', accent: '#f8edf8', cloud: '#ffffff', city: '#e9d5ff' };
+    case 'arctic':
+      return { base: '#d7dde7', secondary: '#f1f5f9', accent: '#ffffff', cloud: '#ffffff', city: '#e0f2fe' };
+    case 'gas':
+      return { base: '#8b6fb0', secondary: '#f0aa5b', accent: '#f8d2a2', cloud: '#fff8ef', city: '#f5d0fe' };
+    case 'rock':
+    default:
+      return { base: '#656d77', secondary: '#8e9aa8', accent: '#c0cad5', cloud: '#f8fafc', city: '#cbd5e1' };
+  }
+}
 
-const getPlanetRadius = (node: StarNode) => {
-  if (node.isDysonSphere) return 23;
-  return developmentRadius[node.development] ?? 18;
-};
+const GalaxyBackdrop: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const starsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
+  const brightStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
 
-// ─── Layered Canvas Galaxy Background ─────────────────────────────────────
-
-const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ parallaxX, parallaxY }) => {
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const staticCanvas = useRef<HTMLCanvasElement | null>(null);
-  const parallaxCanvas = useRef<HTMLCanvasElement | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
+  if (starsRef.current.length === 0) {
+    starsRef.current = Array.from({ length: 400 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: 0.45 + Math.random() * 1.2,
+      o: 0.3 + Math.random() * 0.6,
+    }));
+    brightStarsRef.current = Array.from({ length: 70 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: 1 + Math.random() * 1.4,
+      o: 0.25 + Math.random() * 0.35,
+    }));
+  }
 
   useEffect(() => {
-    const element = wrapRef.current;
-    if (!element) return undefined;
-    const syncSize = () => {
-      const rect = element.getBoundingClientRect();
-      setSize({ width: Math.max(1, Math.floor(rect.width)), height: Math.max(1, Math.floor(rect.height)) });
-    };
-    syncSize();
-    const observer = new ResizeObserver(syncSize);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
 
-  const deepStars = useMemo(() => {
-    if (!size.width || !size.height) return [] as { x: number; y: number; r: number; o: number }[];
-    const rand = mulberry32(0x5eeded + size.width * 13 + size.height * 17);
-    return Array.from({ length: 280 }, () => ({
-      x: rand() * size.width,
-      y: rand() * size.height,
-      r: 0.5 + rand(),
-      o: 0.3 + rand() * 0.6,
-    }));
-  }, [size.width, size.height]);
-
-  const nearStars = useMemo(() => {
-    if (!size.width || !size.height) return [] as { x: number; y: number; r: number; o: number }[];
-    const rand = mulberry32(0x9a1ac7 + size.width * 23 + size.height * 31);
-    return Array.from({ length: 80 }, () => ({
-      x: rand() * (size.width + 600) - 300,
-      y: rand() * (size.height + 600) - 300,
-      r: 0.7 + rand() * 1.8,
-      o: 0.18 + rand() * 0.42,
-    }));
-  }, [size.width, size.height]);
-
-  useEffect(() => {
-    const canvas = staticCanvas.current;
-    if (!canvas || !size.width || !size.height) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
-    canvas.width = Math.floor(size.width * dpr);
-    canvas.height = Math.floor(size.height * dpr);
-    canvas.style.width = `${size.width}px`;
-    canvas.style.height = `${size.height}px`;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size.width, size.height);
-    ctx.fillStyle = '#020617';
-    ctx.fillRect(0, 0, size.width, size.height);
-    deepStars.forEach(star => {
-      ctx.beginPath();
-      ctx.globalAlpha = star.o;
-      ctx.fillStyle = '#ffffff';
-      ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
-  }, [deepStars, size.width, size.height]);
 
-  useEffect(() => {
-    const canvas = parallaxCanvas.current;
-    if (!canvas || !size.width || !size.height) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
-    const overdraw = 480;
-    const drawWidth = size.width + overdraw * 2;
-    const drawHeight = size.height + overdraw * 2;
-    canvas.width = Math.floor(drawWidth * dpr);
-    canvas.height = Math.floor(drawHeight * dpr);
-    canvas.style.width = `${drawWidth}px`;
-    canvas.style.height = `${drawHeight}px`;
-    canvas.style.left = `${-overdraw}px`;
-    canvas.style.top = `${-overdraw}px`;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, drawWidth, drawHeight);
+    let raf = 0;
+    let resizeObserver: ResizeObserver | null = null;
 
-    // The parallax layer is drawn once and then moved with CSS transforms.
-    // This avoids repainting nebulae/stars every mouse-move, which was the main FPS hit on desktop Chrome.
-    const drawNebula = (x: number, y: number, radius: number, inner: string, outer: string) => {
-      const cx = x + overdraw;
-      const cy = y + overdraw;
-      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-      grad.addColorStop(0, inner);
-      grad.addColorStop(0.45, outer);
-      grad.addColorStop(1, 'rgba(2, 6, 23, 0)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, drawWidth, drawHeight);
-    };
+    const draw = () => {
+      const width = host.clientWidth;
+      const height = host.clientHeight;
+      const targetW = Math.max(1, Math.floor(width * dpr));
+      const targetH = Math.max(1, Math.floor(height * dpr));
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
 
-    ctx.globalCompositeOperation = 'screen';
-    drawNebula(size.width * 0.25, size.height * 0.25, Math.max(size.width, size.height) * 0.7, 'rgba(99, 102, 241, 0.22)', 'rgba(37, 99, 235, 0.08)');
-    drawNebula(size.width * 0.82, size.height * 0.62, Math.max(size.width, size.height) * 0.55, 'rgba(20, 184, 166, 0.18)', 'rgba(6, 182, 212, 0.06)');
-    drawNebula(size.width * 0.48, size.height * 0.92, Math.max(size.width, size.height) * 0.5, 'rgba(168, 85, 247, 0.16)', 'rgba(76, 29, 149, 0.06)');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
 
-    ctx.globalCompositeOperation = 'source-over';
-    nearStars.forEach(star => {
-      const x = star.x + overdraw;
-      const y = star.y + overdraw;
-      ctx.beginPath();
-      ctx.globalAlpha = star.o;
-      ctx.fillStyle = '#dff7ff';
-      ctx.arc(x, y, star.r, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
+      const bg = ctx.createLinearGradient(0, 0, 0, height);
+      bg.addColorStop(0, '#020718');
+      bg.addColorStop(0.45, '#07102a');
+      bg.addColorStop(1, '#020617');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, width, height);
 
-    // Low-opacity hex grid overlay, also cached in the parallax canvas.
-    const hexR = 36;
-    const hexH = Math.sqrt(3) * hexR;
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.052)';
-    ctx.lineWidth = 1;
-    for (let y = -hexH; y < drawHeight + hexH; y += hexH) {
-      for (let x = -hexR * 3; x < drawWidth + hexR * 3; x += hexR * 3) {
-        [0, hexR * 1.5].forEach((dx, row) => {
-          const cx = x + dx;
-          const cy = y + row * hexH / 2;
+      const parallaxX = ((panX * 0.3) % width + width) % width;
+      const parallaxY = ((panY * 0.3) % height + height) % height;
+
+      const nebulaCenters = [
+        { x: width * 0.2 + parallaxX * 0.25, y: height * 0.35 + parallaxY * 0.18, r: Math.min(width, height) * 0.5, c: 'rgba(80, 110, 255, 0.18)' },
+        { x: width * 0.7 - parallaxX * 0.18, y: height * 0.28 + parallaxY * 0.15, r: Math.min(width, height) * 0.46, c: 'rgba(70, 220, 220, 0.12)' },
+        { x: width * 0.5 + parallaxX * 0.15, y: height * 0.72 - parallaxY * 0.2, r: Math.min(width, height) * 0.6, c: 'rgba(120, 80, 255, 0.18)' },
+      ];
+
+      nebulaCenters.forEach(({ x, y, r, c }) => {
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, c);
+        grad.addColorStop(0.55, c.replace(/0\.\d+\)/, '0.06)'));
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      });
+
+      ctx.save();
+      ctx.globalAlpha = 0.1;
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1;
+      const hex = 54;
+      const hexH = Math.sin(Math.PI / 3) * hex;
+      const gridOffsetX = ((panX * 0.12) % (hex * 1.5) + hex * 1.5) % (hex * 1.5);
+      const gridOffsetY = ((panY * 0.12) % (hexH * 2) + hexH * 2) % (hexH * 2);
+      for (let row = -2; row < Math.ceil(height / hexH) + 3; row++) {
+        for (let col = -2; col < Math.ceil(width / (hex * 1.5)) + 3; col++) {
+          const x = col * hex * 1.5 - gridOffsetX;
+          const y = row * hexH + (col % 2 ? hexH / 1 : 0) - gridOffsetY;
           ctx.beginPath();
-          for (let i = 0; i < 6; i += 1) {
-            const angle = Math.PI / 6 + i * Math.PI / 3;
-            const hx = cx + Math.cos(angle) * hexR;
-            const hy = cy + Math.sin(angle) * hexR;
-            if (i === 0) ctx.moveTo(hx, hy);
-            else ctx.lineTo(hx, hy);
+          for (let i = 0; i < 6; i++) {
+            const a = (Math.PI / 3) * i;
+            const px = x + Math.cos(a) * hex * 0.5;
+            const py = y + Math.sin(a) * hex * 0.5;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
           }
           ctx.closePath();
           ctx.stroke();
-        });
+        }
       }
-    }
-  }, [nearStars, size.width, size.height]);
+      ctx.restore();
 
-  const parallaxShiftX = ((parallaxX * 0.18) % 480);
-  const parallaxShiftY = ((parallaxY * 0.18) % 480);
+      starsRef.current.forEach((star) => {
+        ctx.fillStyle = `rgba(255,255,255,${star.o})`;
+        ctx.beginPath();
+        ctx.arc(star.x * width, star.y * height, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
 
-  return (
-    <div ref={wrapRef} className="galaxy-background" aria-hidden="true">
-      <canvas ref={staticCanvas} className="galaxy-canvas galaxy-canvas-static" />
-      <canvas
-        ref={parallaxCanvas}
-        className="galaxy-canvas galaxy-canvas-parallax"
-        style={{ transform: `translate3d(${parallaxShiftX}px, ${parallaxShiftY}px, 0)` }}
-      />
-      <div className="galaxy-vignette" />
-    </div>
-  );
+      brightStarsRef.current.forEach((star) => {
+        const x = (star.x * width + parallaxX * 0.18) % width;
+        const y = (star.y * height + parallaxY * 0.18) % height;
+        ctx.fillStyle = `rgba(220,235,255,${star.o})`;
+        ctx.beginPath();
+        ctx.arc(x, y, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    };
+
+    const scheduleDraw = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(draw);
+    };
+
+    scheduleDraw();
+    resizeObserver = new ResizeObserver(scheduleDraw);
+    resizeObserver.observe(host);
+    window.addEventListener('resize', scheduleDraw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', scheduleDraw);
+    };
+  }, [panX, panY]);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" />;
 };
 
-// ─── Ship SVG Silhouettes ──────────────────────────────────────────────────
-
-const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> = ({
-  type,
-  color,
-  size = 10,
-}) => {
+const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> = ({ type, color, size = 7 }) => {
   const s = size;
-  const panel = '#dbeafe';
-  const shadow = 'rgba(2, 6, 23, 0.65)';
-
   switch (type) {
     case 'Destroyer':
       return (
-        <g opacity="0.98">
-          <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={shadow} transform="translate(0 0.6)" />
-          <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
-          <path d={`M0,${-s * 0.78} L${s * 0.12},${s * 0.08} L0,${s * 0.22} L${-s * 0.12},${s * 0.08} Z`} fill={panel} opacity="0.42" />
-          <line x1={-s * 0.24} y1={s * 0.18} x2={s * 0.24} y2={s * 0.18} stroke="#020617" strokeWidth="0.28" opacity="0.65" />
+        <g fill={color} stroke="#0f172a" strokeWidth="0.3" opacity="0.96">
+          <path d={`M0 ${-s} L${s * 0.62} ${s * 0.58} L0 ${s * 0.18} L${-s * 0.62} ${s * 0.58} Z`} />
+          <path d={`M0 ${-s * 0.65} L${s * 0.18} ${-s * 0.05} L0 ${s * 0.16} L${-s * 0.18} ${-s * 0.05} Z`} fill="#e2e8f0" opacity="0.45" />
         </g>
       );
     case 'BattleShip':
       return (
-        <g opacity="0.98">
-          <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={shadow} transform="translate(0 0.8)" />
-          <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={color} stroke={panel} strokeWidth="0.34" />
-          <rect x={-s * 0.12} y={-s * 0.75} width={s * 0.24} height={s * 0.9} rx="0.8" fill={panel} opacity="0.34" />
-          <line x1={-s * 0.42} y1={s * 0.28} x2={s * 0.42} y2={s * 0.28} stroke="#020617" strokeWidth="0.32" opacity="0.6" />
-          <circle cx={0} cy={-s * 0.28} r={s * 0.08} fill="#ffffff" opacity="0.55" />
+        <g fill={color} stroke="#0f172a" strokeWidth="0.35" opacity="0.98">
+          <path d={`M0 ${-s} L${s * 0.74} ${s * 0.6} L${s * 0.2} ${s * 0.3} L${-s * 0.2} ${s * 0.3} L${-s * 0.74} ${s * 0.6} Z`} />
+          <rect x={-s * 0.12} y={-s * 0.56} width={s * 0.24} height={s * 0.74} rx="0.8" fill="#f8fafc" opacity="0.28" />
         </g>
       );
     case 'Carrier':
       return (
-        <g opacity="0.98">
-          <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={shadow} transform="translate(0 0.7)" />
-          <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
-          <rect x={-s * 0.36} y={-s * 0.24} width={s * 0.72} height={s * 0.18} rx="0.6" fill="#020617" opacity="0.42" />
-          <line x1={-s * 0.46} y1={s * 0.18} x2={s * 0.46} y2={s * 0.18} stroke={panel} strokeWidth="0.42" opacity="0.45" />
-          <circle cx={-s * 0.28} cy={s * 0.44} r={s * 0.07} fill="#fff" opacity="0.45" />
-          <circle cx={s * 0.28} cy={s * 0.44} r={s * 0.07} fill="#fff" opacity="0.45" />
+        <g fill={color} stroke="#0f172a" strokeWidth="0.35" opacity="0.96">
+          <path d={`M${-s * 0.72} ${s * 0.36} L${-s * 0.52} ${-s * 0.12} L0 ${-s * 0.84} L${s * 0.52} ${-s * 0.12} L${s * 0.72} ${s * 0.36} Z`} />
+          <path d={`M${-s * 0.24} ${-s * 0.02} L0 ${-s * 0.42} L${s * 0.24} ${-s * 0.02}`} stroke="#f8fafc" strokeWidth="0.45" fill="none" opacity="0.42" />
         </g>
       );
     case 'ColonyShip':
       return (
-        <g opacity="0.94">
-          <circle r={s * 0.5} fill={color} stroke={panel} strokeWidth="0.3" />
-          <path d={`M${-s * 0.42},${s * 0.08} L0,${s * 0.86} L${s * 0.42},${s * 0.08}`} fill="none" stroke={color} strokeWidth={s * 0.22} strokeLinecap="round" />
-          <circle r={s * 0.22} fill={panel} opacity="0.34" />
+        <g fill={color} stroke="#0f172a" strokeWidth="0.25" opacity="0.92">
+          <ellipse rx={s * 0.58} ry={s * 0.42} />
+          <path d={`M${-s * 0.22} ${s * 0.38} L0 ${s * 0.8} L${s * 0.22} ${s * 0.38}`} />
+          <circle r={s * 0.18} fill="#ffffff" opacity="0.25" />
         </g>
       );
     case 'Fighter':
       return (
-        <g opacity="0.96">
-          <path d={`M0,${-s * 0.82} L${s * 0.34},${s * 0.56} L0,${s * 0.18} L${-s * 0.34},${s * 0.56} Z`} fill={color} stroke={panel} strokeWidth="0.24" />
-          <line x1="0" y1={-s * 0.48} x2="0" y2={s * 0.16} stroke={panel} strokeWidth="0.28" opacity="0.5" />
+        <g fill={color} stroke="#0f172a" strokeWidth="0.2" opacity="0.92">
+          <path d={`M0 ${-s * 0.72} L${s * 0.28} ${s * 0.52} L0 ${s * 0.12} L${-s * 0.28} ${s * 0.52} Z`} />
         </g>
       );
     default:
@@ -340,184 +252,71 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
   }
 };
 
-// ─── Development / Planet Surface Renderers ───────────────────────────────
-
-const DevelopmentIcon: React.FC<{ development: string }> = ({ development }) => {
-  const windowDots = (xs: number[], ys: number[]) => xs.flatMap((x) => ys.map((y) => (
-    <rect key={`${x}-${y}`} x={x - 0.22} y={y - 0.22} width="0.44" height="0.44" rx="0.08" fill="#e0f2fe" opacity="0.68" />
-  )));
-
-  switch (development) {
-    case 'colony':
-      return (
-        <g opacity="0.96">
-          <ellipse cx="0" cy="5.2" rx="8" ry="1.7" fill="rgba(2,6,23,0.5)" />
-          <path d="M-7,3.8 A7,6 0 0,1 7,3.8 Z" fill="rgba(14,165,233,0.28)" stroke="#a5f3fc" strokeWidth="0.75" />
-          <path d="M-4.6,3.6 A4.6,4 0 0,1 4.6,3.6" fill="none" stroke="#ecfeff" strokeWidth="0.45" opacity="0.8" />
-          <rect x="-1.2" y="-2.8" width="2.4" height="6.6" rx="0.45" fill="#94a3b8" stroke="#dbeafe" strokeWidth="0.35" />
-          <line x1="0" y1="-2.8" x2="0" y2="-6" stroke="#a5f3fc" strokeWidth="0.45" />
-          <circle cx="0" cy="-6.4" r="0.65" fill="#67e8f9" />
-        </g>
-      );
-    case 'city':
-      return (
-        <g opacity="0.96">
-          <ellipse cx="0" cy="6.5" rx="10.5" ry="2" fill="rgba(2,6,23,0.55)" />
-          <path d="M-10,6.2 C-6,3.2 -2,4 0,2.7 C3,1 6.3,2.7 10,5.8" fill="rgba(15,23,42,0.42)" stroke="#7dd3fc" strokeWidth="0.45" />
-          <rect x="-7.5" y="0.4" width="3.2" height="5.8" rx="0.35" fill="#1e3a8a" stroke="#93c5fd" strokeWidth="0.32" />
-          <rect x="-3.4" y="-2.6" width="3.5" height="8.8" rx="0.38" fill="#164e63" stroke="#67e8f9" strokeWidth="0.32" />
-          <rect x="1.1" y="-1" width="3.6" height="7.2" rx="0.35" fill="#312e81" stroke="#a5b4fc" strokeWidth="0.32" />
-          <rect x="5.4" y="1.8" width="2.7" height="4.4" rx="0.3" fill="#1d4ed8" stroke="#93c5fd" strokeWidth="0.28" />
-          {windowDots([-6.3, -5.2], [2, 3.4, 4.8])}
-          {windowDots([-2.2, -1.1], [-0.8, 0.8, 2.4, 4])}
-          {windowDots([2.4, 3.4], [0.9, 2.5, 4.1])}
-        </g>
-      );
-    case 'metropolis':
-      return (
-        <g opacity="0.98">
-          <ellipse cx="0" cy="7.5" rx="13" ry="2.3" fill="rgba(2,6,23,0.62)" />
-          <path d="M-12,7 C-9,3.8 -4,2.9 0,1.2 C5.5,-1 9.7,2.9 12,6.8" fill="rgba(15,23,42,0.46)" stroke="#c4b5fd" strokeWidth="0.45" />
-          <rect x="-10" y="1.2" width="2.6" height="6" rx="0.35" fill="#1e1b4b" stroke="#818cf8" strokeWidth="0.3" />
-          <rect x="-6.8" y="-2.4" width="3.2" height="9.6" rx="0.38" fill="#312e81" stroke="#a78bfa" strokeWidth="0.35" />
-          <rect x="-2.7" y="-6.7" width="4.8" height="13.9" rx="0.5" fill="#164e63" stroke="#67e8f9" strokeWidth="0.38" />
-          <polygon points="-2.7,-6.7 -0.3,-9.7 2.1,-6.7" fill="#67e8f9" opacity="0.68" />
-          <rect x="2.9" y="-3.8" width="3.8" height="11" rx="0.4" fill="#4c1d95" stroke="#d8b4fe" strokeWidth="0.35" />
-          <rect x="7.3" y="0.2" width="2.7" height="7" rx="0.35" fill="#1e3a8a" stroke="#93c5fd" strokeWidth="0.3" />
-          <path d="M-11,7.1 C-6,5.7 6,5.7 11,7.1" fill="none" stroke="#67e8f9" strokeWidth="0.55" opacity="0.55" />
-          {windowDots([-5.8, -4.8], [-0.5, 1.2, 2.9, 4.6])}
-          {windowDots([-1.3, 0.3], [-4, -2.3, -0.6, 1.1, 2.8, 4.5])}
-          {windowDots([4, 5.2], [-1.6, 0.2, 2, 3.8, 5.6])}
-        </g>
-      );
-    case 'arcology':
-      return (
-        <g opacity="0.98">
-          <ellipse cx="0" cy="7.8" rx="13.5" ry="2.4" fill="rgba(2,6,23,0.6)" />
-          <path d="M-11,5.5 A11,9 0 0,1 11,5.5" fill="rgba(8,47,73,0.5)" stroke="#67e8f9" strokeWidth="0.7" />
-          <path d="M-7.5,5.5 A7.5,6 0 0,1 7.5,5.5" fill="none" stroke="#cffafe" strokeWidth="0.45" opacity="0.7" />
-          <rect x="-4.8" y="-2.4" width="3.2" height="8.6" rx="0.45" fill="#155e75" stroke="#a5f3fc" strokeWidth="0.32" />
-          <rect x="-0.9" y="-6.2" width="3.2" height="12.4" rx="0.48" fill="#0f766e" stroke="#99f6e4" strokeWidth="0.32" />
-          <rect x="3" y="-1.4" width="3.1" height="7.6" rx="0.45" fill="#1d4ed8" stroke="#bfdbfe" strokeWidth="0.32" />
-        </g>
-      );
-    case 'coreworld':
-      return (
-        <g opacity="0.99">
-          <ellipse cx="0" cy="8" rx="14" ry="2.5" fill="rgba(2,6,23,0.64)" />
-          <path d="M-12,6.8 C-7,1.5 -2,-2 2,-4.8 C6,-2 10,2.5 12,6.8" fill="rgba(113,63,18,0.45)" stroke="#fde68a" strokeWidth="0.55" />
-          <rect x="-7" y="-1" width="3.3" height="8" fill="#92400e" stroke="#fbbf24" strokeWidth="0.32" rx="0.4" />
-          <rect x="-2.6" y="-7.2" width="5.2" height="14.2" fill="#b45309" stroke="#fde68a" strokeWidth="0.38" rx="0.48" />
-          <rect x="4" y="-2.5" width="3.6" height="9.5" fill="#78350f" stroke="#fcd34d" strokeWidth="0.32" rx="0.4" />
-          <circle cx="0" cy="-3.6" r="1.2" fill="#fef3c7" opacity="0.82" />
-          <path d="M-9,7 C-4,4.9 4,4.9 9,7" stroke="#fbbf24" strokeWidth="0.58" fill="none" opacity="0.75" />
-        </g>
-      );
-    default:
-      return null;
-  }
-};
-
-const PlanetSurface: React.FC<{ node: StarNode; radius: number; gradientId: string; clipId: string; visual: PlanetVisual }> = ({
-  node,
-  radius,
-  gradientId,
-  clipId,
-  visual,
-}) => {
-  const seed = hashString(node.id);
-  const offset = (seed % 17) - 8;
-
-  if (node.isDysonSphere) {
+const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ development, color }) => {
+  if (development === 'none') return null;
+  if (development === 'colony') {
     return (
-      <g>
-        <circle r={radius} fill="url(#dyson-gradient)" stroke="#fde68a" strokeWidth="2" filter="url(#dyson-glow)" />
-        <circle r={radius * 0.44} fill="#fff7ed" opacity="0.95"  />
-        <circle r={radius * 0.72} fill="none" stroke="#facc15" strokeWidth="1" strokeDasharray="7 4"  />
-        <circle r={radius * 0.96} fill="none" stroke="#fb923c" strokeWidth="1" strokeDasharray="2 6"  />
+      <g opacity="0.96">
+        <ellipse cx="0" cy="5.5" rx="7" ry="2" fill="rgba(2,6,23,0.45)" />
+        <path d="M-6,4 A6,6 0 0,1 6,4" fill="none" stroke={color} strokeWidth="1.2" />
+        <line x1="-7" y1="4" x2="7" y2="4" stroke={color} strokeWidth="1" />
+        <line x1="0" y1="4" x2="0" y2="-2" stroke={color} strokeWidth="0.9" />
+        <circle cx="0" cy="-2.5" r="0.9" fill={color} />
       </g>
     );
   }
 
-  const surface = (() => {
-    switch (visual.biome) {
-      case 'ice':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.72">
-            <path d={`M${-radius},${-radius * 0.2 + offset / 3} C${-radius * 0.25},${-radius * 0.52} ${radius * 0.2},${radius * 0.15} ${radius},${-radius * 0.22}`} fill="none" stroke="#ecfeff" strokeWidth="2.2" />
-            <path d={`M${-radius},${radius * 0.3} C${-radius * 0.2},${radius * 0.05} ${radius * 0.32},${radius * 0.55} ${radius},${radius * 0.15}`} fill="none" stroke="#bae6fd" strokeWidth="1.5" />
-            <circle cx={-radius * 0.35} cy={-radius * 0.35} r={radius * 0.16} fill="#f8fafc" opacity="0.5" />
-          </g>
-        );
-      case 'lava':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.86">
-            <path d={`M${-radius * 0.8},${-radius * 0.2} L${-radius * 0.2},${radius * 0.05} L${radius * 0.05},${-radius * 0.28} L${radius * 0.55},${radius * 0.18}`} fill="none" stroke="#fef3c7" strokeWidth="1.4" />
-            <path d={`M${-radius * 0.45},${radius * 0.55} L${-radius * 0.1},${radius * 0.16} L${radius * 0.35},${radius * 0.42}`} fill="none" stroke="#ef4444" strokeWidth="2" />
-            <circle cx={radius * 0.36} cy={-radius * 0.42} r={radius * 0.12} fill="#f97316" opacity="0.65" />
-          </g>
-        );
-      case 'jungle':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.78">
-            <path d={`M${-radius},${-radius * 0.08} C${-radius * 0.4},${-radius * 0.3} ${radius * 0.3},${radius * 0.1} ${radius},${-radius * 0.18}`} fill="none" stroke="#dcfce7" strokeWidth="1.3" opacity="0.65" />
-            <path d={`M${-radius * 0.75},${radius * 0.34} C${-radius * 0.2},${radius * 0.05} ${radius * 0.35},${radius * 0.7} ${radius},${radius * 0.2}`} fill="none" stroke="#16a34a" strokeWidth="3.2" opacity="0.7" />
-            <ellipse cx={-radius * 0.2} cy={-radius * 0.34} rx={radius * 0.36} ry={radius * 0.14} fill="#22c55e" opacity="0.35" />
-          </g>
-        );
-      case 'ocean':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.78">
-            <path d={`M${-radius},${-radius * 0.28} C${-radius * 0.25},${-radius * 0.5} ${radius * 0.1},${radius * 0.05} ${radius},${-radius * 0.12}`} fill="none" stroke="#f8fafc" strokeWidth="1.7" />
-            <path d={`M${-radius * 0.85},${radius * 0.22} C${-radius * 0.1},${-radius * 0.05} ${radius * 0.28},${radius * 0.5} ${radius},${radius * 0.25}`} fill="none" stroke="#bae6fd" strokeWidth="1.4" opacity="0.75" />
-            <ellipse cx={radius * 0.1} cy={-radius * 0.26} rx={radius * 0.26} ry={radius * 0.09} fill="#ecfeff" opacity="0.45" />
-          </g>
-        );
-      case 'desert':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.8">
-            <path d={`M${-radius},${-radius * 0.1} C${-radius * 0.2},${-radius * 0.36} ${radius * 0.2},${radius * 0.16} ${radius},${-radius * 0.08}`} fill="none" stroke="#ffedd5" strokeWidth="1.4" />
-            <path d={`M${-radius},${radius * 0.34} C${-radius * 0.3},${radius * 0.08} ${radius * 0.2},${radius * 0.56} ${radius},${radius * 0.26}`} fill="none" stroke="#fdba74" strokeWidth="2" opacity="0.75" />
-            <circle cx={-radius * 0.45} cy={-radius * 0.38} r={radius * 0.14} fill="#fcd34d" opacity="0.45" />
-          </g>
-        );
-      case 'gas':
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.88">
-            {[-0.45, -0.18, 0.1, 0.34].map((y, idx) => (
-              <rect key={idx} x={-radius} y={radius * y} width={radius * 2} height={radius * 0.12} fill={idx % 2 === 0 ? '#f5d0fe' : '#bfdbfe'} opacity={0.4 + idx * 0.09} />
-            ))}
-            <ellipse cx={radius * 0.28} cy={radius * 0.18} rx={radius * 0.25} ry={radius * 0.09} fill="#fde68a" opacity="0.5" />
-          </g>
-        );
-      case 'dead':
-      default:
-        return (
-          <g clipPath={`url(#${clipId})`} opacity="0.7">
-            <circle cx={-radius * 0.38} cy={-radius * 0.2} r={radius * 0.13} fill="#0f172a" opacity="0.35" />
-            <circle cx={radius * 0.25} cy={radius * 0.12} r={radius * 0.18} fill="#0f172a" opacity="0.25" />
-            <circle cx={-radius * 0.08} cy={radius * 0.45} r={radius * 0.1} fill="#e2e8f0" opacity="0.18" />
-          </g>
-        );
-    }
-  })();
+  const skyline = {
+    city: [
+      [-7, 0, 3, 5],
+      [-3.5, -2, 3, 7],
+      [0, -4, 3.2, 9],
+      [3.8, -1, 3, 6],
+    ],
+    metropolis: [
+      [-8, -1, 3, 6],
+      [-4.3, -5, 3.2, 10],
+      [-0.3, -7, 3.3, 12],
+      [3.6, -4, 3.1, 9],
+      [7.1, -2, 2.6, 7],
+    ],
+    arcology: [
+      [-7.5, -2, 3, 7],
+      [-4, -6, 3.5, 11],
+      [0, -8, 4, 13],
+      [4.5, -5, 3.5, 10],
+      [8.3, -1, 2.6, 6],
+    ],
+    coreworld: [
+      [-7.5, -3, 3, 8],
+      [-3.8, -7, 3.6, 12],
+      [0, -10, 4.4, 15],
+      [4.6, -6, 3.6, 11],
+      [8.5, -2, 2.7, 7],
+    ],
+  } as Record<string, number[][]>;
 
+  const bars = skyline[development] ?? skyline.city;
   return (
-    <g>
-      <circle r={radius} fill={`url(#${gradientId})`} stroke="rgba(226, 232, 240, 0.28)" strokeWidth="1.1" />
-      {surface}
-      <circle r={radius} fill={`url(#${gradientId}-shade)`} opacity="0.85" pointerEvents="none" />
+    <g opacity="0.98">
+      <ellipse cx="0" cy="6" rx="10" ry="2.5" fill="rgba(2,6,23,0.45)" />
+      {bars.map(([x, y, w, h], idx) => (
+        <g key={`${development}-${idx}`}>
+          <rect x={x + 0.7} y={y + 0.8} width={w} height={h} rx="0.4" fill="rgba(2,6,23,0.38)" />
+          <rect x={x} y={y} width={w} height={h} rx="0.4" fill={color} />
+        </g>
+      ))}
+      <line x1="-10" y1="5.2" x2="10" y2="5.2" stroke="rgba(15,23,42,0.8)" strokeWidth="0.8" />
     </g>
   );
 };
 
-interface OrbitShipsProps {
+const OrbitShips: React.FC<{
   ships: Ship[];
+  playerColors: Record<string, string>;
   players: GameState['players'];
   planetRadius: number;
-}
-
-const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius }) => {
+}> = ({ ships, playerColors, players, planetRadius }) => {
   if (ships.length === 0) return null;
 
   const groups: { type: Ship['type']; owner: string; count: number }[] = [];
@@ -528,13 +327,11 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
   });
 
   const display = groups.slice(0, 8);
-  const orbitRadius = planetRadius + 14;
+  const orbitRadius = planetRadius + 18;
   const angleStep = (2 * Math.PI) / Math.max(display.length, 1);
 
   return (
     <>
-      <circle r={orbitRadius} fill="none" stroke="rgba(148, 163, 184, 0.14)" strokeDasharray="2 7" strokeWidth="1" pointerEvents="none" />
-      <g pointerEvents="none">
       {display.map((group, i) => {
         const angle = i * angleStep - Math.PI / 2;
         const cx = Math.cos(angle) * orbitRadius;
@@ -543,12 +340,11 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
         const color = player ? playerColors[player.color] : '#94a3b8';
         return (
           <g key={`${group.type}-${group.owner}-${i}`} transform={`translate(${cx}, ${cy})`} pointerEvents="none">
-            <circle r="7.5" fill="rgba(2, 6, 23, 0.78)" stroke={color} strokeWidth="0.55" opacity="0.82" />
-            <ShipIcon type={group.type} color={color} size={5.8} />
+            <ShipIcon type={group.type} color={color} size={7} />
             {group.count > 1 && (
               <>
-                <circle cx="5" cy="-5" r="3.4" fill="#020617" stroke={color} strokeWidth="0.8" />
-                <text x="5" y="-2.7" textAnchor="middle" fill={color} fontSize="4.2" fontWeight="bold" fontFamily="Orbitron, monospace">
+                <circle cx="5" cy="-5" r="4" fill="#020617" stroke={color} strokeWidth="0.8" />
+                <text x="5" y="-2.5" textAnchor="middle" fill={color} fontSize="4.5" fontWeight="bold" fontFamily="monospace">
                   {group.count}
                 </text>
               </>
@@ -556,12 +352,119 @@ const OrbitShips: React.FC<OrbitShipsProps> = ({ ships, players, planetRadius })
           </g>
         );
       })}
-      </g>
     </>
   );
 };
 
-// ─── Main Map Component ───────────────────────────────────────────────────
+const PlanetBody: React.FC<{
+  node: StarNode;
+  radius: number;
+  isSelected: boolean;
+  claimedColor?: string | null;
+}> = ({ node, radius, isSelected, claimedColor }) => {
+  const biome = getBiome(node);
+  const palette = getBiomePalette(biome);
+  const gradientId = `planet-grad-${node.id}`;
+  const clipId = `planet-clip-${node.id}`;
+  const surfaceId = `planet-surface-${node.id}`;
+
+  const developmentColors: Record<string, string> = {
+    colony: '#a3e635',
+    city: '#93c5fd',
+    metropolis: '#c084fc',
+    arcology: '#67e8f9',
+    coreworld: '#fde68a',
+  };
+
+  return (
+    <>
+      <defs>
+        <radialGradient id={gradientId} cx="30%" cy="28%" r="75%">
+          <stop offset="0%" stopColor={palette.accent} />
+          <stop offset="52%" stopColor={palette.secondary} />
+          <stop offset="100%" stopColor={palette.base} />
+        </radialGradient>
+        <clipPath id={clipId}>
+          <circle r={radius} />
+        </clipPath>
+        <radialGradient id={surfaceId} cx="35%" cy="32%" r="70%">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.0)" />
+          <stop offset="70%" stopColor="rgba(255,255,255,0.0)" />
+          <stop offset="100%" stopColor="rgba(2,6,23,0.5)" />
+        </radialGradient>
+      </defs>
+
+      {claimedColor && (
+        <>
+          <circle r={radius + 12} fill={claimedColor} opacity="0.06" />
+          <circle r={radius + 5} fill="none" stroke={claimedColor} strokeWidth="1.6" opacity="0.6" />
+        </>
+      )}
+
+      <ellipse cx="0" cy={radius * 0.95} rx={radius * 1.25} ry={radius * 0.45} fill="rgba(0,0,0,0.35)" />
+
+      <g clipPath={`url(#${clipId})`}>
+        <circle r={radius} fill={`url(#${gradientId})`} />
+
+        {biome === 'gas' ? (
+          <>
+            <ellipse cx="-1" cy="-7" rx={radius * 1.05} ry={radius * 0.2} fill={palette.accent} opacity="0.45" />
+            <ellipse cx="1" cy="-1" rx={radius * 1.05} ry={radius * 0.17} fill={palette.secondary} opacity="0.45" />
+            <ellipse cx="0" cy="6" rx={radius * 1.05} ry={radius * 0.2} fill={palette.base} opacity="0.35" />
+            <path d={`M${-radius} ${radius * 0.1} Q0 ${-radius * 0.2} ${radius} ${radius * 0.1}`} stroke={palette.cloud} strokeWidth="1.2" opacity="0.3" fill="none" />
+          </>
+        ) : (
+          <>
+            <ellipse cx={-radius * 0.2} cy={-radius * 0.18} rx={radius * 0.5} ry={radius * 0.24} fill={palette.secondary} opacity="0.58" transform="rotate(-18)" />
+            <ellipse cx={radius * 0.24} cy={radius * 0.12} rx={radius * 0.38} ry={radius * 0.19} fill={palette.base} opacity="0.42" transform="rotate(24)" />
+            <ellipse cx={-radius * 0.34} cy={radius * 0.28} rx={radius * 0.22} ry={radius * 0.14} fill={palette.accent} opacity="0.34" transform="rotate(-10)" />
+            {(biome === 'ocean' || biome === 'tropical' || biome === 'continental' || biome === 'savannah' || biome === 'tundra') && (
+              <>
+                <path d={`M${-radius * 0.85} ${-radius * 0.1} Q${-radius * 0.2} ${-radius * 0.55} ${radius * 0.25} ${-radius * 0.18} Q${radius * 0.45} ${radius * 0.05} ${radius * 0.8} ${-radius * 0.2}`} stroke={palette.cloud} strokeWidth="1.1" opacity="0.38" fill="none" />
+                <path d={`M${-radius * 0.7} ${radius * 0.38} Q0 ${radius * 0.15} ${radius * 0.55} ${radius * 0.42}`} stroke={palette.cloud} strokeWidth="0.9" opacity="0.28" fill="none" />
+              </>
+            )}
+            {biome === 'desert' && (
+              <>
+                <path d={`M${-radius * 0.95} ${-radius * 0.25} Q${-radius * 0.2} ${-radius * 0.42} ${radius * 0.7} ${-radius * 0.2}`} stroke={palette.accent} strokeWidth="1" opacity="0.35" fill="none" />
+                <path d={`M${-radius * 0.8} ${radius * 0.25} Q0 0 ${radius * 0.8} ${radius * 0.25}`} stroke={palette.accent} strokeWidth="0.9" opacity="0.25" fill="none" />
+              </>
+            )}
+            {biome === 'arid' && <ellipse cx={radius * 0.18} cy={-radius * 0.14} rx={radius * 0.62} ry={radius * 0.12} fill={palette.accent} opacity="0.22" transform="rotate(-24)" />}
+            {biome === 'arctic' && <ellipse cx={-radius * 0.08} cy={-radius * 0.08} rx={radius * 0.75} ry={radius * 0.5} fill="#ffffff" opacity="0.3" />}
+            {biome === 'rock' && (
+              <>
+                <circle cx={-radius * 0.25} cy={-radius * 0.15} r={radius * 0.16} fill="rgba(15,23,42,0.28)" />
+                <circle cx={radius * 0.3} cy={radius * 0.22} r={radius * 0.12} fill="rgba(15,23,42,0.24)" />
+              </>
+            )}
+          </>
+        )}
+
+        <circle r={radius} fill={`url(#${surfaceId})`} />
+        <ellipse cx={-radius * 0.2} cy={-radius * 0.55} rx={radius * 0.6} ry={radius * 0.28} fill="#ffffff" opacity="0.22" transform="rotate(-18)" />
+      </g>
+
+      <circle r={radius} fill="none" stroke={isSelected ? '#38bdf8' : 'rgba(226,232,240,0.18)'} strokeWidth="1.3" />
+
+      {!node.isDysonSphere && node.development !== 'none' && (
+        <g transform={`translate(0, ${radius * 0.15})`} pointerEvents="none">
+          <DevelopmentIcon development={node.development} color={developmentColors[node.development] ?? palette.city} />
+        </g>
+      )}
+
+      {node.isDysonSphere && (
+        <g opacity="0.7">
+          <circle r={radius * 0.52} fill="none" stroke="#fde68a" strokeWidth="1.2" />
+          <circle r={radius * 0.26} fill="#fcd34d" opacity="0.85" />
+        </g>
+      )}
+
+      <circle r={radius} fill="none" stroke="#0f172a" strokeWidth="0.8" opacity="0.55" />
+      <circle r={radius - 0.8} fill="none" stroke="#ffffff" strokeWidth="0.5" opacity="0.14" />
+    </>
+  );
+};
 
 export const Map: React.FC<MapProps> = ({
   gameState,
@@ -573,12 +476,12 @@ export const Map: React.FC<MapProps> = ({
   onMoveShip,
   fogOfWarEnabled,
 }) => {
-  const { panX, panY, scale, parallaxX, parallaxY, handlers, reset, svgRef } = usePanZoom(0.3, 2.5, 50, 50, 0.7, 500, 500);
+  const { panX, panY, scale, handlers, reset } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
 
   const getPlayerColorHex = (claimedBy: string | null) => {
     if (!claimedBy) return '#475569';
     const player = gameState.players.find((p) => p.id === claimedBy);
-    return player ? playerColors[player.color] : '#475569';
+    return player ? PLAYER_COLORS[player.color] : '#475569';
   };
 
   const isNodeVisible = (node: StarNode) => {
@@ -621,84 +524,27 @@ export const Map: React.FC<MapProps> = ({
   const centerX = 500;
   const centerY = 500;
 
-  const gradientDefs = gameState.nodes.map((node) => {
-    const visual = getPlanetVisual(node);
-    const safeId = node.id.replace(/[^a-zA-Z0-9_-]/g, '');
-    return (
-      <React.Fragment key={`defs-${node.id}`}>
-        <radialGradient id={`planet-${safeId}`} cx="34%" cy="27%" r="78%">
-          <stop offset="0%" stopColor={visual.gradient[0]} />
-          <stop offset="48%" stopColor={visual.gradient[1]} />
-          <stop offset="100%" stopColor={visual.gradient[2]} />
-        </radialGradient>
-        <radialGradient id={`planet-${safeId}-shade`} cx="32%" cy="24%" r="76%">
-          <stop offset="0%" stopColor="rgba(255,255,255,0.24)" />
-          <stop offset="55%" stopColor="rgba(255,255,255,0)" />
-          <stop offset="100%" stopColor="rgba(2,6,23,0.72)" />
-        </radialGradient>
-        <clipPath id={`clip-${safeId}`}>
-          <circle r={getPlanetRadius(node)} />
-        </clipPath>
-      </React.Fragment>
-    );
-  });
+  const visibleNodes = useMemo(() => gameState.nodes.filter(isNodeVisible), [gameState.nodes, fogOfWarEnabled, myPlayerId, selectedNode, selectedShip]);
 
   return (
-    <div className="absolute inset-0 w-full h-full overflow-hidden touch-none border border-cyan-950/60 bg-slate-950 map-shell">
-      <GalaxyBackground parallaxX={parallaxX} parallaxY={parallaxY} />
-      <svg ref={svgRef} className="relative z-[1] w-full h-full cursor-grab active:cursor-grabbing select-none map-svg" {...handlers}>
-        <defs>
-          <linearGradient id="lane-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#0e7490" stopOpacity="0.18" />
-            <stop offset="45%" stopColor="#22d3ee" stopOpacity="0.62" />
-            <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.32" />
-          </linearGradient>
-          <linearGradient id="lane-hot-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#facc15" stopOpacity="0.28" />
-            <stop offset="50%" stopColor="#f59e0b" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.35" />
-          </linearGradient>
-          <radialGradient id="dyson-gradient" cx="50%" cy="50%" r="65%">
-            <stop offset="0%" stopColor="#fff7ed" />
-            <stop offset="42%" stopColor="#facc15" />
-            <stop offset="100%" stopColor="#7c2d12" />
-          </radialGradient>
-          <filter id="lane-glow" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="ship-soft-glow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="1.6" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="planet-shadow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0" dy="7" stdDeviation="5" floodColor="#020617" floodOpacity="0.72" />
-          </filter>
-          <filter id="dyson-glow" x="-70%" y="-70%" width="240%" height="240%">
-            <feGaussianBlur stdDeviation="7" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="reticle-glow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {gradientDefs}
-        </defs>
+    <div className="relative h-full w-full overflow-hidden border border-slate-900 bg-slate-950 touch-none">
+      <GalaxyBackdrop panX={panX} panY={panY} />
 
+      <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
-          {/* Tactical grid rings */}
+          {/* Controlled space overlay */}
+          {visibleNodes.map((node) => {
+            if (!node.claimedBy) return null;
+            const color = getPlayerColorHex(node.claimedBy);
+            return (
+              <g key={`territory-${node.id}`} pointerEvents="none">
+                <circle cx={node.x} cy={node.y} r={96} fill={color} opacity="0.045" />
+                <circle cx={node.x} cy={node.y} r={62} fill={color} opacity="0.028" />
+              </g>
+            );
+          })}
+
+          {/* Grid rings retained from original map style */}
           {Array.from({ length: ringsCount }).map((_, idx) => {
             const radius = ((idx + 1) / ringsCount) * maxRadius;
             return (
@@ -708,26 +554,14 @@ export const Map: React.FC<MapProps> = ({
                 cy={centerY}
                 r={radius}
                 fill="none"
-                stroke="#22d3ee"
-                strokeWidth="0.8"
-                strokeDasharray="3 10"
-                opacity="0.1"
+                stroke="#1e293b"
+                strokeWidth="1"
+                strokeDasharray="4 8"
+                opacity="0.18"
                 pointerEvents="none"
               />
             );
           })}
-
-          <line
-            x1={centerX}
-            y1={centerY}
-            x2={centerX + maxRadius}
-            y2={centerY}
-            stroke="#22d3ee"
-            strokeWidth="1.2"
-            opacity="0.14"
-            pointerEvents="none"
-            className="origin-[500px_500px]"
-          />
 
           {/* Hyperlanes */}
           {gameState.nodes.map((node) =>
@@ -741,7 +575,7 @@ export const Map: React.FC<MapProps> = ({
                 selectedShip &&
                 ((node.id === selectedNode?.id && reachableNodes[targetNode.id] !== undefined) ||
                   (targetNode.id === selectedNode?.id && reachableNodes[node.id] !== undefined));
-              const gradient = isSelectedPath ? 'url(#lane-hot-gradient)' : 'url(#lane-gradient)';
+
               return (
                 <g key={`link-${node.id}-${linkId}`} pointerEvents="none">
                   <line
@@ -749,11 +583,9 @@ export const Map: React.FC<MapProps> = ({
                     y1={node.y}
                     x2={targetNode.x}
                     y2={targetNode.y}
-                    stroke={gradient}
-                    strokeWidth={isSelectedPath ? 3 : 1.5}
-                    opacity={isSelectedPath ? 0.9 : 0.72}
-                   
-                    strokeLinecap="round"
+                    stroke={isSelectedPath ? '#facc15' : '#1d4f91'}
+                    strokeWidth={isSelectedPath ? 2.2 : 1.6}
+                    opacity={isSelectedPath ? 0.76 : 0.5}
                   />
                   <line
                     x1={node.x}
@@ -761,114 +593,66 @@ export const Map: React.FC<MapProps> = ({
                     x2={targetNode.x}
                     y2={targetNode.y}
                     stroke={isSelectedPath ? '#fde68a' : '#67e8f9'}
-                    strokeWidth={isSelectedPath ? 1.25 : 0.8}
-                    strokeDasharray="8 34"
-                    opacity={isSelectedPath ? 0.92 : 0.5}
-                    strokeLinecap="round"
-                    className="animate-lane-flow"
-                  />
+                    strokeWidth={isSelectedPath ? 1.1 : 0.8}
+                    strokeDasharray={isSelectedPath ? '4 12' : '3 18'}
+                    opacity={isSelectedPath ? 0.9 : 0.55}
+                  >
+                    <animate attributeName="stroke-dashoffset" from="18" to="0" dur={isSelectedPath ? '1.4s' : '2.6s'} repeatCount="indefinite" />
+                  </line>
                 </g>
               );
             })
           )}
 
-          {/* Star System Nodes */}
+          {/* Star systems */}
           {gameState.nodes.map((node) => {
             const visible = isNodeVisible(node);
             const isSelected = selectedNode?.id === node.id;
             const isReachable = reachableNodes[node.id] !== undefined;
             const nodeColor = getPlayerColorHex(node.claimedBy);
-            const planetR = getPlanetRadius(node);
-            const visual = getPlanetVisual(node);
-            const safeId = node.id.replace(/[^a-zA-Z0-9_-]/g, '');
+            const planetR = node.isDysonSphere ? 20 : 17;
 
             if (!visible) {
               return (
                 <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
-                  <circle r="17" fill="rgba(15,23,42,0.85)" stroke="rgba(34,211,238,0.12)" strokeWidth="1" />
-                  <text y="3" textAnchor="middle" fill="#334155" fontSize="8" fontFamily="Orbitron, monospace">?</text>
+                  <circle r="15" fill="#0f172a" stroke="#1e293b" strokeWidth="1" />
+                  <text y="3" textAnchor="middle" fill="#334155" fontSize="8" fontFamily="monospace">?</text>
                 </g>
               );
             }
 
             return (
-              <g
-                key={node.id}
-                transform={`translate(${node.x}, ${node.y})`}
-                className="cursor-pointer group star-system-node"
-                onClick={() => handleNodeClick(node)}
-              >
-                <ellipse
-                  cx="0"
-                  cy={planetR * 0.72}
-                  rx={planetR * 1.05}
-                  ry={planetR * 0.26}
-                  fill={visual.shadow}
-                  opacity="0.58"
-                 
-                  pointerEvents="none"
-                />
-
-                {node.claimedBy && (
-                  <>
-                    <circle r={planetR + 8} fill="none" stroke={nodeColor} strokeWidth="1.4" opacity="0.68" />
-                    <circle r={planetR + 13} fill="none" stroke={nodeColor} strokeWidth="0.9" strokeDasharray="5 8" opacity="0.35" />
-                  </>
-                )}
-
+              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="group cursor-pointer" onClick={() => handleNodeClick(node)}>
                 {isReachable && (
-                  <circle
-                    r={planetR + 18}
-                    fill="none"
-                    stroke="#facc15"
-                    strokeWidth="2"
-                    strokeDasharray="4 6"
-                   
-                  />
+                  <circle r={planetR + 14} fill="none" stroke="#facc15" strokeWidth="1.8" strokeDasharray="5 5" opacity="0.78">
+                    <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="10s" repeatCount="indefinite" />
+                  </circle>
                 )}
 
                 {isSelected && (
-                  <g className="selected-system-ring" pointerEvents="none">
-                    <circle
-                      r={planetR + 15}
-                      fill="none"
-                      stroke={node.claimedBy ? nodeColor : '#67e8f9'}
-                      strokeWidth="1.6"
-                      strokeDasharray="8 6"
-                      opacity="0.92"
-                    />
-                    <circle
-                      r={planetR + 21}
-                      fill="none"
-                      stroke="#67e8f9"
-                      strokeWidth="0.9"
-                      strokeDasharray="2 8"
-                      opacity="0.55"
-                    />
+                  <g pointerEvents="none">
+                    <circle r={planetR + 9} fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="8 6" opacity="0.9">
+                      <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="7s" repeatCount="indefinite" />
+                    </circle>
+                    <circle r={planetR + 13} fill="none" stroke="#38bdf8" strokeWidth="1" strokeDasharray="3 9" opacity="0.4">
+                      <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="360 0 0" to="0 0 0" dur="12s" repeatCount="indefinite" />
+                    </circle>
                   </g>
                 )}
 
                 {node.hasGateway && (
-                  <circle r={planetR + 17} fill="none" stroke="#a78bfa" strokeWidth="1.4" strokeDasharray="10 5" />
+                  <circle r={planetR + 8} fill="none" stroke="#8b5cf6" strokeWidth="1.2" strokeDasharray="7 5" opacity="0.85">
+                    <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="16s" repeatCount="indefinite" />
+                  </circle>
                 )}
-                {node.hasShipyard && (
-                  <circle r={planetR + 12} fill="none" stroke="#22d3ee" strokeWidth="1.4" strokeDasharray="2 4" opacity="0.9" />
-                )}
-                {node.hasFtlInhibitor && (
-                  <circle r={planetR + 15} fill="none" stroke="#ef4444" strokeWidth="1.4" opacity="0.92" />
-                )}
+                {node.hasShipyard && <circle r={planetR + 5} fill="none" stroke="#06b6d4" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />}
+                {node.hasFtlInhibitor && <circle r={planetR + 6} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.75" />}
 
-                <g className="planet-sphere">
-                  <PlanetSurface node={node} radius={planetR} gradientId={`planet-${safeId}`} clipId={`clip-${safeId}`} visual={visual} />
+                <g className="transition-transform duration-200 ease-out group-hover:scale-105" style={{ transformOrigin: 'center', transformBox: 'fill-box' }}>
+                  <PlanetBody node={node} radius={planetR} isSelected={isSelected} claimedColor={node.claimedBy ? nodeColor : null} />
                 </g>
 
-                {!node.isDysonSphere && node.development !== 'none' && (
-                  <g transform={`translate(0, ${Math.max(2, planetR * 0.08)}) scale(${Math.min(1.5, planetR / 24)})`} pointerEvents="none">
-                    <DevelopmentIcon development={node.development} />
-                  </g>
-                )}
-
-                <OrbitShips ships={node.ships} players={gameState.players} planetRadius={planetR} />
+                <OrbitShips ships={node.ships} playerColors={PLAYER_COLORS} players={gameState.players} planetRadius={planetR} />
 
                 {node.groundUnits.length > 0 && (() => {
                   const groups: { owner: string; count: number }[] = [];
@@ -877,16 +661,22 @@ export const Map: React.FC<MapProps> = ({
                     if (existing) existing.count += 1;
                     else groups.push({ owner: unit.owner, count: 1 });
                   });
+                  const shadeMap: Record<string, string> = {
+                    green: '#34d399',
+                    blue: '#60a5fa',
+                    purple: '#a78bfa',
+                    yellow: '#fbbf24',
+                  };
                   return (
-                    <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 12})`} pointerEvents="none">
+                    <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 8})`} pointerEvents="none">
                       {groups.map((group, idx) => {
                         const player = gameState.players.find((p) => p.id === group.owner);
-                        const color = group.owner === 'npc' ? '#94a3b8' : groundShadeMap[player?.color || 'green'];
+                        const color = group.owner === 'npc' ? '#94a3b8' : shadeMap[player?.color || 'green'];
                         return (
                           <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
-                            <rect x="-5.5" y="-5.5" width="11" height="11" fill={color} stroke="#020617" strokeWidth="1" rx="2" opacity="0.97" />
+                            <rect x="-5" y="-5" width="10" height="10" fill={color} stroke="#020617" strokeWidth="1" rx="1.5" opacity="0.95" />
                             {group.count > 1 && (
-                              <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6.3" fontWeight="bold" fontFamily="Orbitron, monospace">
+                              <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6" fontWeight="bold" fontFamily="monospace">
                                 {group.count}
                               </text>
                             )}
@@ -898,16 +688,15 @@ export const Map: React.FC<MapProps> = ({
                 })()}
 
                 <text
-                  y={planetR + 31}
+                  y={planetR + 18}
                   textAnchor="middle"
-                  fill={isSelected ? '#67e8f9' : isReachable ? '#fde68a' : '#cbd5e1'}
+                  fill={isSelected ? '#7dd3fc' : isReachable ? '#fde68a' : '#cbd5e1'}
                   fontSize="11"
-                  fontWeight={isSelected ? '800' : '600'}
-                  fontFamily="Orbitron, monospace"
-                  letterSpacing="0.08em"
-                  className="pointer-events-none system-name-label"
+                  fontWeight={isSelected ? 'bold' : 'normal'}
+                  fontFamily="monospace"
+                  className="pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
                 >
-                  {node.name.toUpperCase()}
+                  {node.name}
                 </text>
               </g>
             );
@@ -915,36 +704,56 @@ export const Map: React.FC<MapProps> = ({
         </g>
       </svg>
 
-      <div className="absolute right-4 bottom-4 flex flex-col space-y-2 z-10">
+      <div className="absolute bottom-4 right-4 z-10 flex flex-col space-y-2">
         <button
-          onClick={() => { audio.playBeep(); reset(); }}
-          className="holo-panel px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-cyan-200 rounded hover:text-white"
+          onClick={() => {
+            audio.playBeep();
+            reset();
+          }}
+          className="rounded border border-slate-800 bg-slate-900/90 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-white"
         >
           Recenter Map
         </button>
       </div>
 
-      <div className="absolute left-4 top-4 holo-panel rounded px-3 py-2 text-[9px] font-mono text-slate-300 space-y-1.5 z-10 pointer-events-none hidden md:block">
-        <div className="text-[8px] uppercase tracking-[0.24em] text-cyan-300 border-b border-cyan-500/20 pb-1 mb-1">Tactical Overlay</div>
+      <div className="pointer-events-none absolute left-4 top-4 z-10 hidden space-y-1 rounded border border-slate-800/60 bg-slate-900/80 px-2.5 py-1.5 font-mono text-[9px] text-slate-400 md:block">
         <div className="flex items-center space-x-1.5">
-          <span className="inline-block w-2 h-2 rounded-full bg-slate-600" />
+          <span className="inline-block h-2 w-2 rounded-full bg-slate-600" />
           <span>Neutral System</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="inline-block w-2 h-2 rounded-full bg-[#10b981] shadow-[0_0_4px_#10b981]" />
-          <span>Empire Halo</span>
+          <span className="inline-block h-2 w-2 rounded-full bg-[#10b981] shadow-[0_0_4px_#10b981]" />
+          <span>Friendly Territory</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="inline-block w-2.5 h-2.5 border border-cyan-500 border-dashed rounded-full" />
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-cyan-500 border-dashed" />
           <span>Shipyard</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="inline-block w-2.5 h-2.5 border border-purple-500 border-dashed rounded-full" />
-          <span>Gateway</span>
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-purple-500 border-dashed" />
+          <span>Gateway (Instant Jump)</span>
         </div>
         <div className="flex items-center space-x-1.5">
-          <span className="inline-block w-2.5 h-2.5 border border-red-500 rounded-full" />
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-red-500" />
           <span>FTL Inhibitor</span>
+        </div>
+        <div className="mt-1 space-y-0.5 border-t border-slate-800 pt-1">
+          <div className="flex items-center space-x-1.5">
+            <svg width="10" height="10" viewBox="-5 -5 10 10"><path d="M0 -4 L2 2 L0 1 L-2 2 Z" fill="#94a3b8" /></svg>
+            <span>Destroyer</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <svg width="10" height="10" viewBox="-6 -6 12 12"><path d="M0 -5 L3 3 L1 1 L-1 1 L-3 3 Z" fill="#94a3b8" /></svg>
+            <span>BattleShip</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <svg width="10" height="10" viewBox="-6 -6 12 12"><path d="M-4 2 L-3 -1 L0 -5 L3 -1 L4 2 Z" fill="#94a3b8" /></svg>
+            <span>Carrier</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <svg width="10" height="10" viewBox="-5 -5 10 10"><ellipse rx="3" ry="2.2" fill="#94a3b8" /></svg>
+            <span>Colony Ship</span>
+          </div>
         </div>
       </div>
     </div>

@@ -39,6 +39,8 @@ export interface Ship {
   carriedUnits: GroundUnit[];
   /** Deprecated legacy field. New carrier rules do not use fighter cargo, but this stays for old saves. */
   carriedFighters: Ship[];
+  /** The most recent system this ship moved from. Used for FTL inhibitor retreat rules. */
+  lastNodeId?: string | null;
 }
 
 export interface StarNode {
@@ -59,22 +61,15 @@ export interface StarNode {
   groundUnitsBuiltThisTurn: number;
   isNpcPlanet: boolean;
   isDysonSphere: boolean;
+  biome?: PlanetBiome;
 }
+
+export type PlanetBiome = 'ocean' | 'tropical' | 'continental' | 'savannah' | 'desert' | 'arid' | 'tundra' | 'alpine' | 'arctic' | 'gas' | 'rock';
 
 export interface Alliance {
   id: string;
   playerIds: [string, string];
-  /**
-   * pending = request sent, no gameplay effects yet
-   * active = accepted, ally rules apply
-   * breaking = accepted alliance that will end after breaker's action phase
-   * declined = stored as a short-lived notification so the requester can see the response
-   */
-  status: 'pending' | 'active' | 'breaking' | 'declined';
-  requestedBy?: string;
-  requestedAt?: string;
-  respondedBy?: string;
-  respondedAt?: string;
+  status: 'active' | 'breaking';
   breakRequestedBy?: string;
   breakEffectiveAfterPlayerId?: string;
 }
