@@ -206,6 +206,7 @@ button[class*="emerald"]:not(:disabled):active {
 .map-shell {
   background: #020617;
   box-shadow: inset 0 0 80px rgba(15, 23, 42, 0.8), inset 0 0 180px rgba(14, 116, 144, 0.12);
+  contain: layout paint;
 }
 
 .galaxy-background {
@@ -221,6 +222,8 @@ button[class*="emerald"]:not(:disabled):active {
   inset: 0;
   width: 100%;
   height: 100%;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .galaxy-canvas-static { opacity: 1; }
@@ -235,7 +238,9 @@ button[class*="emerald"]:not(:disabled):active {
 }
 
 .map-svg {
-  filter: saturate(1.1) contrast(1.05);
+  filter: saturate(1.08) contrast(1.03);
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .glass-panel,
@@ -375,7 +380,8 @@ header .font-mono {
 }
 
 .animate-lane-flow {
-  animation: laneFlow 2.1s linear infinite;
+  animation: laneFlow 3.6s linear infinite;
+  will-change: stroke-dashoffset;
 }
 
 @keyframes slowSpin {
@@ -435,21 +441,39 @@ header .font-mono {
 }
 
 
-/* Keep the game map full-height and the selected-system panel in the compact right drawer. */
+/* Keep the game map full-height and the selected-system panel desktop/mobile responsive. */
 .game-map-main,
 main.flex-1 {
   min-height: 0;
+  height: calc(100dvh - 52px);
+  flex: 1 1 auto;
 }
 
-.node-details-drawer {
-  left: auto !important;
-  right: 0 !important;
-  top: 56px !important;
-  bottom: 0 !important;
-  max-width: min(390px, calc(100vw - 12px));
+.game-map-main > .map-shell,
+.game-map-main > div.absolute {
+  height: 100% !important;
+}
+
+@media (min-width: 641px) {
+  .node-details-drawer {
+    left: auto !important;
+    right: 0 !important;
+    top: 52px !important;
+    bottom: 0 !important;
+    width: 380px !important;
+    max-width: min(380px, calc(100vw - 24px));
+    max-height: none !important;
+    border-left: 1px solid rgba(34, 211, 238, 0.18);
+    border-top: 0;
+  }
 }
 
 @media (max-width: 640px) {
+  .game-map-main,
+  main.flex-1 {
+    height: calc(100dvh - 56px);
+  }
+
   .node-details-drawer {
     left: 0 !important;
     right: 0 !important;
@@ -459,5 +483,12 @@ main.flex-1 {
     max-height: 56vh;
     border-left: 0;
     border-top: 1px solid rgba(34, 211, 238, 0.22);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-lane-flow,
+  .selected-system-ring {
+    animation: none !important;
   }
 }

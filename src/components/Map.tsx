@@ -146,7 +146,7 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
   const deepStars = useMemo(() => {
     if (!size.width || !size.height) return [] as { x: number; y: number; r: number; o: number }[];
     const rand = mulberry32(0x5eeded + size.width * 13 + size.height * 17);
-    return Array.from({ length: 400 }, () => ({
+    return Array.from({ length: 280 }, () => ({
       x: rand() * size.width,
       y: rand() * size.height,
       r: 0.5 + rand(),
@@ -157,7 +157,7 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
   const nearStars = useMemo(() => {
     if (!size.width || !size.height) return [] as { x: number; y: number; r: number; o: number }[];
     const rand = mulberry32(0x9a1ac7 + size.width * 23 + size.height * 31);
-    return Array.from({ length: 130 }, () => ({
+    return Array.from({ length: 80 }, () => ({
       x: rand() * (size.width + 600) - 300,
       y: rand() * (size.height + 600) - 300,
       r: 0.7 + rand() * 1.8,
@@ -168,7 +168,7 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
   useEffect(() => {
     const canvas = staticCanvas.current;
     if (!canvas || !size.width || !size.height) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     canvas.width = Math.floor(size.width * dpr);
     canvas.height = Math.floor(size.height * dpr);
     canvas.style.width = `${size.width}px`;
@@ -192,26 +192,32 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
   useEffect(() => {
     const canvas = parallaxCanvas.current;
     if (!canvas || !size.width || !size.height) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(size.width * dpr);
-    canvas.height = Math.floor(size.height * dpr);
-    canvas.style.width = `${size.width}px`;
-    canvas.style.height = `${size.height}px`;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+    const overdraw = 480;
+    const drawWidth = size.width + overdraw * 2;
+    const drawHeight = size.height + overdraw * 2;
+    canvas.width = Math.floor(drawWidth * dpr);
+    canvas.height = Math.floor(drawHeight * dpr);
+    canvas.style.width = `${drawWidth}px`;
+    canvas.style.height = `${drawHeight}px`;
+    canvas.style.left = `${-overdraw}px`;
+    canvas.style.top = `${-overdraw}px`;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size.width, size.height);
+    ctx.clearRect(0, 0, drawWidth, drawHeight);
 
-    const px = parallaxX * 0.3;
-    const py = parallaxY * 0.3;
-
+    // The parallax layer is drawn once and then moved with CSS transforms.
+    // This avoids repainting nebulae/stars every mouse-move, which was the main FPS hit on desktop Chrome.
     const drawNebula = (x: number, y: number, radius: number, inner: string, outer: string) => {
-      const grad = ctx.createRadialGradient(x + px, y + py, 0, x + px, y + py, radius);
+      const cx = x + overdraw;
+      const cy = y + overdraw;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
       grad.addColorStop(0, inner);
       grad.addColorStop(0.45, outer);
       grad.addColorStop(1, 'rgba(2, 6, 23, 0)');
       ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, size.width, size.height);
+      ctx.fillRect(0, 0, drawWidth, drawHeight);
     };
 
     ctx.globalCompositeOperation = 'screen';
@@ -221,8 +227,8 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
 
     ctx.globalCompositeOperation = 'source-over';
     nearStars.forEach(star => {
-      const x = ((star.x + px * 0.85) % (size.width + 600)) - 300;
-      const y = ((star.y + py * 0.85) % (size.height + 600)) - 300;
+      const x = star.x + overdraw;
+      const y = star.y + overdraw;
       ctx.beginPath();
       ctx.globalAlpha = star.o;
       ctx.fillStyle = '#dff7ff';
@@ -231,15 +237,13 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
     });
     ctx.globalAlpha = 1;
 
-    // Low-opacity hex grid overlay.
+    // Low-opacity hex grid overlay, also cached in the parallax canvas.
     const hexR = 36;
     const hexH = Math.sqrt(3) * hexR;
-    const offsetX = ((px * 0.2) % (hexR * 1.5)) - hexR * 1.5;
-    const offsetY = ((py * 0.2) % hexH) - hexH;
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.055)';
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.052)';
     ctx.lineWidth = 1;
-    for (let y = offsetY; y < size.height + hexH; y += hexH) {
-      for (let x = offsetX; x < size.width + hexR * 2; x += hexR * 3) {
+    for (let y = -hexH; y < drawHeight + hexH; y += hexH) {
+      for (let x = -hexR * 3; x < drawWidth + hexR * 3; x += hexR * 3) {
         [0, hexR * 1.5].forEach((dx, row) => {
           const cx = x + dx;
           const cy = y + row * hexH / 2;
@@ -256,12 +260,19 @@ const GalaxyBackground: React.FC<{ parallaxX: number; parallaxY: number }> = ({ 
         });
       }
     }
-  }, [nearStars, parallaxX, parallaxY, size.width, size.height]);
+  }, [nearStars, size.width, size.height]);
+
+  const parallaxShiftX = ((parallaxX * 0.18) % 480);
+  const parallaxShiftY = ((parallaxY * 0.18) % 480);
 
   return (
     <div ref={wrapRef} className="galaxy-background" aria-hidden="true">
       <canvas ref={staticCanvas} className="galaxy-canvas galaxy-canvas-static" />
-      <canvas ref={parallaxCanvas} className="galaxy-canvas galaxy-canvas-parallax" />
+      <canvas
+        ref={parallaxCanvas}
+        className="galaxy-canvas galaxy-canvas-parallax"
+        style={{ transform: `translate3d(${parallaxShiftX}px, ${parallaxShiftY}px, 0)` }}
+      />
       <div className="galaxy-vignette" />
     </div>
   );
@@ -281,7 +292,7 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
   switch (type) {
     case 'Destroyer':
       return (
-        <g opacity="0.98" filter="url(#ship-soft-glow)">
+        <g opacity="0.98">
           <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={shadow} transform="translate(0 0.6)" />
           <path d={`M0,${-s * 1.12} L${s * 0.42},${s * 0.16} L${s * 0.25},${s * 0.72} L0,${s * 0.42} L${-s * 0.25},${s * 0.72} L${-s * 0.42},${s * 0.16} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
           <path d={`M0,${-s * 0.78} L${s * 0.12},${s * 0.08} L0,${s * 0.22} L${-s * 0.12},${s * 0.08} Z`} fill={panel} opacity="0.42" />
@@ -290,7 +301,7 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
       );
     case 'BattleShip':
       return (
-        <g opacity="0.98" filter="url(#ship-soft-glow)">
+        <g opacity="0.98">
           <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={shadow} transform="translate(0 0.8)" />
           <path d={`M0,${-s * 1.18} L${s * 0.7},${s * 0.55} L${s * 0.24},${s * 0.28} L${s * 0.1},${s * 0.82} L${-s * 0.1},${s * 0.82} L${-s * 0.24},${s * 0.28} L${-s * 0.7},${s * 0.55} Z`} fill={color} stroke={panel} strokeWidth="0.34" />
           <rect x={-s * 0.12} y={-s * 0.75} width={s * 0.24} height={s * 0.9} rx="0.8" fill={panel} opacity="0.34" />
@@ -300,7 +311,7 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
       );
     case 'Carrier':
       return (
-        <g opacity="0.98" filter="url(#ship-soft-glow)">
+        <g opacity="0.98">
           <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={shadow} transform="translate(0 0.7)" />
           <path d={`M${-s * 0.72},${-s * 0.36} L0,${-s * 0.82} L${s * 0.72},${-s * 0.36} L${s * 0.52},${s * 0.62} L${-s * 0.52},${s * 0.62} Z`} fill={color} stroke={panel} strokeWidth="0.32" />
           <rect x={-s * 0.36} y={-s * 0.24} width={s * 0.72} height={s * 0.18} rx="0.6" fill="#020617" opacity="0.42" />
@@ -311,7 +322,7 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
       );
     case 'ColonyShip':
       return (
-        <g opacity="0.94" filter="url(#ship-soft-glow)">
+        <g opacity="0.94">
           <circle r={s * 0.5} fill={color} stroke={panel} strokeWidth="0.3" />
           <path d={`M${-s * 0.42},${s * 0.08} L0,${s * 0.86} L${s * 0.42},${s * 0.08}`} fill="none" stroke={color} strokeWidth={s * 0.22} strokeLinecap="round" />
           <circle r={s * 0.22} fill={panel} opacity="0.34" />
@@ -319,7 +330,7 @@ const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> =
       );
     case 'Fighter':
       return (
-        <g opacity="0.96" filter="url(#ship-soft-glow)">
+        <g opacity="0.96">
           <path d={`M0,${-s * 0.82} L${s * 0.34},${s * 0.56} L0,${s * 0.18} L${-s * 0.34},${s * 0.56} Z`} fill={color} stroke={panel} strokeWidth="0.24" />
           <line x1="0" y1={-s * 0.48} x2="0" y2={s * 0.16} stroke={panel} strokeWidth="0.28" opacity="0.5" />
         </g>
@@ -741,7 +752,7 @@ export const Map: React.FC<MapProps> = ({
                     stroke={gradient}
                     strokeWidth={isSelectedPath ? 3 : 1.5}
                     opacity={isSelectedPath ? 0.9 : 0.72}
-                    filter="url(#lane-glow)"
+                   
                     strokeLinecap="round"
                   />
                   <line
@@ -794,13 +805,13 @@ export const Map: React.FC<MapProps> = ({
                   ry={planetR * 0.26}
                   fill={visual.shadow}
                   opacity="0.58"
-                  filter="url(#planet-shadow)"
+                 
                   pointerEvents="none"
                 />
 
                 {node.claimedBy && (
                   <>
-                    <circle r={planetR + 8} fill="none" stroke={nodeColor} strokeWidth="1.4" opacity="0.68" filter="url(#reticle-glow)" />
+                    <circle r={planetR + 8} fill="none" stroke={nodeColor} strokeWidth="1.4" opacity="0.68" />
                     <circle r={planetR + 13} fill="none" stroke={nodeColor} strokeWidth="0.9" strokeDasharray="5 8" opacity="0.35" />
                   </>
                 )}
@@ -812,12 +823,12 @@ export const Map: React.FC<MapProps> = ({
                     stroke="#facc15"
                     strokeWidth="2"
                     strokeDasharray="4 6"
-                    filter="url(#reticle-glow)"
+                   
                   />
                 )}
 
                 {isSelected && (
-                  <g className="selected-system-ring" pointerEvents="none" filter="url(#reticle-glow)">
+                  <g className="selected-system-ring" pointerEvents="none">
                     <circle
                       r={planetR + 15}
                       fill="none"
@@ -844,10 +855,10 @@ export const Map: React.FC<MapProps> = ({
                   <circle r={planetR + 12} fill="none" stroke="#22d3ee" strokeWidth="1.4" strokeDasharray="2 4" opacity="0.9" />
                 )}
                 {node.hasFtlInhibitor && (
-                  <circle r={planetR + 15} fill="none" stroke="#ef4444" strokeWidth="1.4" opacity="0.92" filter="url(#reticle-glow)" />
+                  <circle r={planetR + 15} fill="none" stroke="#ef4444" strokeWidth="1.4" opacity="0.92" />
                 )}
 
-                <g className="planet-sphere" filter="url(#planet-shadow)">
+                <g className="planet-sphere">
                   <PlanetSurface node={node} radius={planetR} gradientId={`planet-${safeId}`} clipId={`clip-${safeId}`} visual={visual} />
                 </g>
 
@@ -873,7 +884,7 @@ export const Map: React.FC<MapProps> = ({
                         const color = group.owner === 'npc' ? '#94a3b8' : groundShadeMap[player?.color || 'green'];
                         return (
                           <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
-                            <rect x="-5.5" y="-5.5" width="11" height="11" fill={color} stroke="#020617" strokeWidth="1" rx="2" opacity="0.97" filter="url(#ship-soft-glow)" />
+                            <rect x="-5.5" y="-5.5" width="11" height="11" fill={color} stroke="#020617" strokeWidth="1" rx="2" opacity="0.97" />
                             {group.count > 1 && (
                               <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6.3" fontWeight="bold" fontFamily="Orbitron, monospace">
                                 {group.count}

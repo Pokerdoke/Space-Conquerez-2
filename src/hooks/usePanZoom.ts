@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 
 interface PanZoomState {
   panX: number;
@@ -33,6 +33,23 @@ export function usePanZoom(
   const panStart = useRef({ x: 0, y: 0 });
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
+  const frameRef = useRef<number | null>(null);
+  const pendingStateRef = useRef<Partial<PanZoomState> | null>(null);
+
+  const scheduleState = useCallback((partial: Partial<PanZoomState>) => {
+    pendingStateRef.current = { ...(pendingStateRef.current || {}), ...partial };
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      const pending = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (pending) setState(prev => ({ ...prev, ...pending }));
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+  }, []);
 
   const getCenteredState = useCallback((scaleValue = initialScale): PanZoomState => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -124,20 +141,20 @@ export function usePanZoom(
     if (!isDragging.current) return;
     const dx = clientX - dragStart.current.x;
     const dy = clientY - dragStart.current.y;
-    setState(prev => ({
-      ...prev,
+    scheduleState({
       panX: panStart.current.x + dx,
       panY: panStart.current.y + dy,
       parallaxX: panStart.current.x + dx,
       parallaxY: panStart.current.y + dy
-    }));
-  }, []);
+    });
+  }, [scheduleState]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     handleMove(e.clientX, e.clientY);
   }, [handleMove]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    if (e.cancelable) e.preventDefault();
     if (e.touches.length === 1 && isDragging.current) {
       handleMove(e.touches[0].clientX, e.touches[0].clientY);
     } else if (e.touches.length === 2 && lastTouchDist.current !== null) {
