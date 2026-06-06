@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
@@ -78,6 +78,8 @@ function getBiomePalette(biome: PlanetBiome) {
 
 const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = ({ panX, panY, scale }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraRef = useRef({ panX, panY, scale });
+  cameraRef.current = { panX, panY, scale };
   const starsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
   const parallaxStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
 
@@ -210,8 +212,9 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       ctx.fillRect(0, 0, width, height);
 
       // Derive world offset from the viewport center so zooming does not visibly shift the backdrop.
-      const worldCenterX = (width * 0.5 - panX) / scale;
-      const worldCenterY = (height * 0.5 - panY) / scale;
+      const camera = cameraRef.current;
+      const worldCenterX = (width * 0.5 - camera.panX) / camera.scale;
+      const worldCenterY = (height * 0.5 - camera.panY) / camera.scale;
       const px = worldCenterX * 0.18;
       const py = worldCenterY * 0.18;
 
@@ -240,17 +243,26 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       raf = requestAnimationFrame(draw);
     };
 
+    const handleCameraTransform = (event: Event) => {
+      const detail = (event as CustomEvent<{ panX: number; panY: number; scale: number }>).detail;
+      if (!detail) return;
+      cameraRef.current = detail;
+      scheduleDraw();
+    };
+
     scheduleDraw();
     resizeObserver = new ResizeObserver(scheduleDraw);
     resizeObserver.observe(host);
     window.addEventListener('resize', scheduleDraw);
+    window.addEventListener('spaceconquererz:camera-transform', handleCameraTransform as EventListener);
 
     return () => {
       cancelAnimationFrame(raf);
       resizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleDraw);
+      window.removeEventListener('spaceconquererz:camera-transform', handleCameraTransform as EventListener);
     };
-  }, [panX, panY, scale]);
+  }, []);
 
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" />;
 };
@@ -554,6 +566,326 @@ const PlanetBody: React.FC<{
   );
 };
 
+
+
+type VisibleLink = {
+  key: string;
+  source: StarNode;
+  target: StarNode;
+};
+
+const GROUND_SHADE_MAP: Record<string, string> = {
+  green: '#34d399',
+  blue: '#60a5fa',
+  purple: '#a78bfa',
+  yellow: '#fbbf24',
+};
+
+function getPlayerColorHexFromPlayers(players: GameState['players'], claimedBy: string | null) {
+  if (!claimedBy) return '#475569';
+  const player = players.find((p) => p.id === claimedBy);
+  return player ? PLAYER_COLORS[player.color] : '#475569';
+}
+
+function getGroundOwnerColor(players: GameState['players'], owner: string) {
+  if (owner === 'npc') return '#94a3b8';
+  const player = players.find((p) => p.id === owner);
+  return GROUND_SHADE_MAP[player?.color || 'green'];
+}
+
+function getPlanetRadius(node: StarNode) {
+  return node.isDysonSphere ? 20 : 17;
+}
+
+const StaticMapLayer = React.memo(function StaticMapLayer({
+  nodes,
+  players,
+  visibleNodeIds,
+  links,
+  ringsCount,
+  maxRadius,
+  centerX,
+  centerY,
+  onNodeClick,
+}: {
+  nodes: GameState['nodes'];
+  players: GameState['players'];
+  visibleNodeIds: Set<string>;
+  links: VisibleLink[];
+  ringsCount: number;
+  maxRadius: number;
+  centerX: number;
+  centerY: number;
+  onNodeClick: (node: StarNode) => void;
+}) {
+  return (
+    <>
+      {Array.from({ length: ringsCount }).map((_, idx) => {
+        const radius = ((idx + 1) / ringsCount) * maxRadius;
+        return (
+          <circle
+            key={`grid-ring-${idx}`}
+            cx={centerX}
+            cy={centerY}
+            r={radius}
+            fill="none"
+            stroke="#1e293b"
+            strokeWidth="1"
+            strokeDasharray="4 8"
+            opacity="0.18"
+            pointerEvents="none"
+          />
+        );
+      })}
+
+      {links.map(({ key, source, target }) => (
+        <g key={key} pointerEvents="none" opacity={0.86}>
+          <line
+            x1={source.x}
+            y1={source.y}
+            x2={target.x}
+            y2={target.y}
+            stroke="#164e83"
+            strokeWidth="6"
+            strokeLinecap="round"
+            opacity="0.12"
+            filter="url(#hyperlane-glow)"
+          />
+          <line
+            x1={source.x}
+            y1={source.y}
+            x2={target.x}
+            y2={target.y}
+            stroke="#1e40af"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            opacity="0.35"
+          />
+          <line
+            x1={source.x}
+            y1={source.y}
+            x2={target.x}
+            y2={target.y}
+            stroke="url(#hyperlane-gradient)"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+            opacity="0.72"
+            filter="url(#hyperlane-glow)"
+          />
+          <line
+            x1={source.x}
+            y1={source.y}
+            x2={target.x}
+            y2={target.y}
+            stroke="#bfdbfe"
+            strokeWidth="0.75"
+            strokeLinecap="round"
+            strokeDasharray="2 22"
+            opacity="0.55"
+          >
+            <animate attributeName="stroke-dashoffset" from="24" to="0" dur="2.4s" repeatCount="indefinite" />
+          </line>
+          <circle cx={source.x} cy={source.y} r={1.35} fill="#93c5fd" opacity={0.38} />
+          <circle cx={target.x} cy={target.y} r={1.35} fill="#93c5fd" opacity={0.38} />
+        </g>
+      ))}
+
+      {nodes.map((node) => {
+        const visible = visibleNodeIds.has(node.id);
+        const planetR = getPlanetRadius(node);
+        const nodeColor = getPlayerColorHexFromPlayers(players, node.claimedBy);
+
+        if (!visible) {
+          return (
+            <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
+              <circle r="15" fill="#0f172a" stroke="#1e293b" strokeWidth="1" />
+              <text y="3" textAnchor="middle" fill="#334155" fontSize="8" fontFamily="monospace">?</text>
+            </g>
+          );
+        }
+
+        return (
+          <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="group cursor-pointer" onClick={() => onNodeClick(node)}>
+            {node.hasGateway && (
+              <circle r={planetR + 8} fill="none" stroke="#8b5cf6" strokeWidth="1.2" strokeDasharray="7 5" opacity="0.85">
+                <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="16s" repeatCount="indefinite" />
+              </circle>
+            )}
+            {node.hasShipyard && <circle r={planetR + 5} fill="none" stroke="#06b6d4" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />}
+            {node.hasFtlInhibitor && <circle r={planetR + 6} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.75" />}
+
+            <g className="transition-transform duration-200 ease-out group-hover:scale-105" style={{ transformOrigin: 'center', transformBox: 'fill-box' }}>
+              <PlanetBody node={node} radius={planetR} isSelected={false} claimedColor={node.claimedBy ? nodeColor : null} />
+            </g>
+          </g>
+        );
+      })}
+
+      {players.map((player) => {
+        const ownedNodes = nodes.filter((node) => visibleNodeIds.has(node.id) && node.claimedBy === player.id);
+        if (ownedNodes.length === 0) return null;
+        const color = PLAYER_COLORS[player.color];
+        const ownedIds = new Set(ownedNodes.map((n) => n.id));
+        return (
+          <g key={`territory-layer-${player.id}`} pointerEvents="none">
+            {ownedNodes.map((node) => (
+              <g key={`territory-node-${node.id}`}>
+                <circle cx={node.x} cy={node.y} r={34} fill={color} opacity="0.08" />
+                <circle cx={node.x} cy={node.y} r={34} fill="none" stroke={color} strokeWidth="1.6" opacity="0.46" />
+              </g>
+            ))}
+            {ownedNodes.flatMap((node) =>
+              node.links
+                .filter((linkId) => ownedIds.has(linkId) && node.id < linkId)
+                .map((linkId) => {
+                  const targetNode = nodes.find((n) => n.id === linkId);
+                  if (!targetNode) return null;
+                  return (
+                    <g key={`territory-link-${player.id}-${node.id}-${linkId}`}>
+                      <line x1={node.x} y1={node.y} x2={targetNode.x} y2={targetNode.y} stroke={color} strokeWidth="46" strokeLinecap="round" opacity="0.06" />
+                      <line x1={node.x} y1={node.y} x2={targetNode.x} y2={targetNode.y} stroke={color} strokeWidth="6" strokeLinecap="round" opacity="0.22" />
+                      <line x1={node.x} y1={node.y} x2={targetNode.x} y2={targetNode.y} stroke={color} strokeWidth="2.2" strokeLinecap="round" opacity="0.5" />
+                    </g>
+                  );
+                })
+            )}
+            {ownedNodes.filter((node) => node.hasShipyard).map((node) => (
+              <g key={`territory-shipyard-${player.id}-${node.id}`} filter="url(#shipyard-glow)">
+                <circle cx={node.x} cy={node.y} r={24} fill="none" stroke="#67e8f9" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.95" />
+                <circle cx={node.x} cy={node.y} r={28} fill="none" stroke="#bae6fd" strokeWidth="0.8" opacity="0.55" />
+              </g>
+            ))}
+            {ownedNodes.filter((node) => node.hasFtlInhibitor).map((node) => (
+              <g key={`territory-ftl-${player.id}-${node.id}`} filter="url(#ftl-glow)">
+                <circle cx={node.x} cy={node.y} r={25} fill="none" stroke="#ef4444" strokeWidth="1.7" opacity="0.95" />
+                <circle cx={node.x} cy={node.y} r={29} fill="none" stroke="#fecaca" strokeWidth="0.9" strokeDasharray="5 4" opacity="0.55" />
+              </g>
+            ))}
+          </g>
+        );
+      })}
+    </>
+  );
+}, (prev, next) => (
+  prev.nodes === next.nodes &&
+  prev.players === next.players &&
+  prev.visibleNodeIds === next.visibleNodeIds &&
+  prev.links === next.links &&
+  prev.ringsCount === next.ringsCount &&
+  prev.maxRadius === next.maxRadius &&
+  prev.centerX === next.centerX &&
+  prev.centerY === next.centerY &&
+  prev.onNodeClick === next.onNodeClick
+));
+
+const DynamicMapLayer = React.memo(function DynamicMapLayer({
+  nodes,
+  players,
+  visibleNodeIds,
+  links,
+  selectedNodeId,
+  reachableNodes,
+  selectedShip,
+}: {
+  nodes: GameState['nodes'];
+  players: GameState['players'];
+  visibleNodeIds: Set<string>;
+  links: VisibleLink[];
+  selectedNodeId: string | null;
+  reachableNodes: { [nodeId: string]: number };
+  selectedShip: Ship | null;
+}) {
+  return (
+    <>
+      {selectedShip && selectedNodeId && links.map(({ key, source, target }) => {
+        const isSelectedPath =
+          (source.id === selectedNodeId && reachableNodes[target.id] !== undefined) ||
+          (target.id === selectedNodeId && reachableNodes[source.id] !== undefined);
+        if (!isSelectedPath) return null;
+        return (
+          <g key={`selected-${key}`} pointerEvents="none" opacity={1}>
+            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#facc15" strokeWidth="8" strokeLinecap="round" opacity="0.18" filter="url(#hyperlane-glow)" />
+            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#f59e0b" strokeWidth="3.4" strokeLinecap="round" opacity="0.55" />
+            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#fde68a" strokeWidth="1.6" strokeLinecap="round" opacity="0.95" filter="url(#hyperlane-glow)" />
+            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#fff7ed" strokeWidth="1.15" strokeLinecap="round" strokeDasharray="5 18" opacity="0.9">
+              <animate attributeName="stroke-dashoffset" from="24" to="0" dur="1.2s" repeatCount="indefinite" />
+            </line>
+            <circle cx={source.x} cy={source.y} r={2.1} fill="#fde68a" opacity={0.75} />
+            <circle cx={target.x} cy={target.y} r={2.1} fill="#fde68a" opacity={0.75} />
+          </g>
+        );
+      })}
+
+      {nodes.map((node) => {
+        if (!visibleNodeIds.has(node.id)) return null;
+        const isSelected = selectedNodeId === node.id;
+        const isReachable = reachableNodes[node.id] !== undefined;
+        const planetR = getPlanetRadius(node);
+        return (
+          <g key={`dynamic-${node.id}`} transform={`translate(${node.x}, ${node.y})`} pointerEvents="none">
+            {isReachable && (
+              <circle r={planetR + 14} fill="none" stroke="#facc15" strokeWidth="1.8" strokeDasharray="5 5" opacity="0.78">
+                <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="10s" repeatCount="indefinite" />
+              </circle>
+            )}
+
+            {isSelected && (
+              <g>
+                <circle r={planetR + 9} fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="8 6" opacity="0.9">
+                  <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="7s" repeatCount="indefinite" />
+                </circle>
+                <circle r={planetR + 13} fill="none" stroke="#38bdf8" strokeWidth="1" strokeDasharray="3 9" opacity="0.4">
+                  <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="360 0 0" to="0 0 0" dur="12s" repeatCount="indefinite" />
+                </circle>
+              </g>
+            )}
+
+            <OrbitShips ships={node.ships} playerColors={PLAYER_COLORS} players={players} planetRadius={planetR} />
+
+            {node.groundUnits.length > 0 && (() => {
+              const groups: { owner: string; count: number }[] = [];
+              node.groundUnits.forEach((unit) => {
+                const existing = groups.find((g) => g.owner === unit.owner);
+                if (existing) existing.count += 1;
+                else groups.push({ owner: unit.owner, count: 1 });
+              });
+              return (
+                <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 8})`}>
+                  {groups.map((group, idx) => {
+                    const color = getGroundOwnerColor(players, group.owner);
+                    return (
+                      <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
+                        <rect x="-5" y="-5" width="10" height="10" fill={color} stroke="#020617" strokeWidth="1" rx="1.5" opacity="0.95" />
+                        {group.count > 1 && (
+                          <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6" fontWeight="bold" fontFamily="monospace">
+                            {group.count}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              );
+            })()}
+
+            <text
+              y={planetR + 18}
+              textAnchor="middle"
+              fill={isSelected ? '#7dd3fc' : isReachable ? '#fde68a' : '#cbd5e1'}
+              fontSize="11"
+              fontWeight={isSelected ? 'bold' : 'normal'}
+              fontFamily="monospace"
+              className="pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
+            >
+              {node.name}
+            </text>
+          </g>
+        );
+      })}
+    </>
+  );
+});
+
 export const Map: React.FC<MapProps> = ({
   gameState,
   myPlayerId,
@@ -565,12 +897,6 @@ export const Map: React.FC<MapProps> = ({
   fogOfWarEnabled,
 }) => {
   const { panX, panY, scale, handlers, reset, viewportRef } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
-
-  const getPlayerColorHex = (claimedBy: string | null) => {
-    if (!claimedBy) return '#475569';
-    const player = gameState.players.find((p) => p.id === claimedBy);
-    return player ? PLAYER_COLORS[player.color] : '#475569';
-  };
 
   const visibleNodeIds = useMemo(() => {
     if (!fogOfWarEnabled) {
@@ -597,32 +923,61 @@ export const Map: React.FC<MapProps> = ({
     return visible;
   }, [fogOfWarEnabled, gameState.nodes, myPlayerId]);
 
-  const isNodeVisible = (node: StarNode) => visibleNodeIds.has(node.id);
+  const visibleLinks = useMemo<VisibleLink[]>(() => {
+    const nodeMap = new globalThis.Map(gameState.nodes.map((node) => [node.id, node]));
+    const links: VisibleLink[] = [];
+    for (const node of gameState.nodes) {
+      if (!visibleNodeIds.has(node.id)) continue;
+      for (const linkId of node.links) {
+        if (node.id > linkId || !visibleNodeIds.has(linkId)) continue;
+        const target = nodeMap.get(linkId);
+        if (!target) continue;
+        links.push({ key: `link-${node.id}-${linkId}`, source: node, target });
+      }
+    }
+    return links;
+  }, [gameState.nodes, visibleNodeIds]);
 
-  const handleNodeClick = (node: StarNode) => {
+  const interactionRef = useRef({
+    selectedShip,
+    reachableNodes,
+    phase: gameState.phase,
+    activePlayerId: gameState.players[gameState.activePlayerIndex]?.id,
+  });
+
+  useEffect(() => {
+    interactionRef.current = {
+      selectedShip,
+      reachableNodes,
+      phase: gameState.phase,
+      activePlayerId: gameState.players[gameState.activePlayerIndex]?.id,
+    };
+  }, [selectedShip, reachableNodes, gameState.phase, gameState.activePlayerIndex, gameState.players]);
+
+  const handleNodeClick = useCallback((node: StarNode) => {
     audio.playBeep(500, 0.05);
-    const isReachable = reachableNodes[node.id] !== undefined;
+    const interaction = interactionRef.current;
+    const isReachable = interaction.reachableNodes[node.id] !== undefined;
     if (
-      selectedShip &&
+      interaction.selectedShip &&
       isReachable &&
-      gameState.phase === 1 &&
-      gameState.players[gameState.activePlayerIndex].id === myPlayerId
+      interaction.phase === 1 &&
+      interaction.activePlayerId === myPlayerId
     ) {
       onMoveShip(node.id);
     } else {
       onSelectNode(node);
     }
-  };
+  }, [myPlayerId, onMoveShip, onSelectNode]);
 
   const ringsCount = Math.ceil(Math.sqrt(gameState.nodes.length / 3));
   const maxRadius = 450;
   const centerX = 500;
   const centerY = 500;
 
-
   return (
     <div className="relative h-full w-full overflow-hidden border border-slate-900 bg-slate-950 touch-none">
-      <GalaxyBackdrop panX={0} panY={0} scale={1} />
+      <GalaxyBackdrop panX={panX} panY={panY} scale={scale} />
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <defs>
@@ -652,262 +1007,27 @@ export const Map: React.FC<MapProps> = ({
             <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.35" />
           </linearGradient>
         </defs>
-        <g ref={viewportRef} transform={`translate(${panX}, ${panY}) scale(${scale})`} style={{ willChange: "transform" }}>
-          {/* Grid rings retained from original map style */}
-          {Array.from({ length: ringsCount }).map((_, idx) => {
-            const radius = ((idx + 1) / ringsCount) * maxRadius;
-            return (
-              <circle
-                key={`grid-ring-${idx}`}
-                cx={centerX}
-                cy={centerY}
-                r={radius}
-                fill="none"
-                stroke="#1e293b"
-                strokeWidth="1"
-                strokeDasharray="4 8"
-                opacity="0.18"
-                pointerEvents="none"
-              />
-            );
-          })}
-
-          {/* Hyperlanes */}
-          {gameState.nodes.map((node) =>
-            node.links.map((linkId) => {
-              if (node.id > linkId) return null;
-              const targetNode = gameState.nodes.find((n) => n.id === linkId);
-              if (!targetNode) return null;
-              const visible = isNodeVisible(node) || isNodeVisible(targetNode);
-              if (!visible) return null;
-              const isSelectedPath =
-                selectedShip &&
-                ((node.id === selectedNode?.id && reachableNodes[targetNode.id] !== undefined) ||
-                  (targetNode.id === selectedNode?.id && reachableNodes[node.id] !== undefined));
-
-              return (
-                <g key={`link-${node.id}-${linkId}`} pointerEvents="none" opacity={isSelectedPath ? 1 : 0.86}>
-                  <line
-                    x1={node.x}
-                    y1={node.y}
-                    x2={targetNode.x}
-                    y2={targetNode.y}
-                    stroke={isSelectedPath ? '#facc15' : '#164e83'}
-                    strokeWidth={isSelectedPath ? 8 : 6}
-                    strokeLinecap="round"
-                    opacity={isSelectedPath ? 0.18 : 0.12}
-                    filter="url(#hyperlane-glow)"
-                  />
-                  <line
-                    x1={node.x}
-                    y1={node.y}
-                    x2={targetNode.x}
-                    y2={targetNode.y}
-                    stroke={isSelectedPath ? '#f59e0b' : '#1e40af'}
-                    strokeWidth={isSelectedPath ? 3.4 : 2.4}
-                    strokeLinecap="round"
-                    opacity={isSelectedPath ? 0.55 : 0.35}
-                  />
-                  <line
-                    x1={node.x}
-                    y1={node.y}
-                    x2={targetNode.x}
-                    y2={targetNode.y}
-                    stroke={isSelectedPath ? '#fde68a' : 'url(#hyperlane-gradient)'}
-                    strokeWidth={isSelectedPath ? 1.6 : 1.15}
-                    strokeLinecap="round"
-                    opacity={isSelectedPath ? 0.95 : 0.72}
-                    filter="url(#hyperlane-glow)"
-                  />
-                  <line
-                    x1={node.x}
-                    y1={node.y}
-                    x2={targetNode.x}
-                    y2={targetNode.y}
-                    stroke={isSelectedPath ? '#fff7ed' : '#bfdbfe'}
-                    strokeWidth={isSelectedPath ? 1.15 : 0.75}
-                    strokeLinecap="round"
-                    strokeDasharray={isSelectedPath ? '5 18' : '2 22'}
-                    opacity={isSelectedPath ? 0.9 : 0.55}
-                  >
-                    <animate attributeName="stroke-dashoffset" from="24" to="0" dur={isSelectedPath ? '1.2s' : '2.4s'} repeatCount="indefinite" />
-                  </line>
-                  <circle cx={node.x} cy={node.y} r={isSelectedPath ? 2.1 : 1.35} fill={isSelectedPath ? '#fde68a' : '#93c5fd'} opacity={isSelectedPath ? 0.75 : 0.38} />
-                  <circle cx={targetNode.x} cy={targetNode.y} r={isSelectedPath ? 2.1 : 1.35} fill={isSelectedPath ? '#fde68a' : '#93c5fd'} opacity={isSelectedPath ? 0.75 : 0.38} />
-                </g>
-              );
-            })
-          )}
-
-          {/* Star systems */}
-          {gameState.nodes.map((node) => {
-            const visible = isNodeVisible(node);
-            const isSelected = selectedNode?.id === node.id;
-            const isReachable = reachableNodes[node.id] !== undefined;
-            const nodeColor = getPlayerColorHex(node.claimedBy);
-            const planetR = node.isDysonSphere ? 20 : 17;
-
-            if (!visible) {
-              return (
-                <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
-                  <circle r="15" fill="#0f172a" stroke="#1e293b" strokeWidth="1" />
-                  <text y="3" textAnchor="middle" fill="#334155" fontSize="8" fontFamily="monospace">?</text>
-                </g>
-              );
-            }
-
-            return (
-              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="group cursor-pointer" onClick={() => handleNodeClick(node)}>
-                {isReachable && (
-                  <circle r={planetR + 14} fill="none" stroke="#facc15" strokeWidth="1.8" strokeDasharray="5 5" opacity="0.78">
-                    <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="10s" repeatCount="indefinite" />
-                  </circle>
-                )}
-
-                {isSelected && (
-                  <g pointerEvents="none">
-                    <circle r={planetR + 9} fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="8 6" opacity="0.9">
-                      <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="7s" repeatCount="indefinite" />
-                    </circle>
-                    <circle r={planetR + 13} fill="none" stroke="#38bdf8" strokeWidth="1" strokeDasharray="3 9" opacity="0.4">
-                      <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="360 0 0" to="0 0 0" dur="12s" repeatCount="indefinite" />
-                    </circle>
-                  </g>
-                )}
-
-                {node.hasGateway && (
-                  <circle r={planetR + 8} fill="none" stroke="#8b5cf6" strokeWidth="1.2" strokeDasharray="7 5" opacity="0.85">
-                    <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="16s" repeatCount="indefinite" />
-                  </circle>
-                )}
-                {node.hasShipyard && <circle r={planetR + 5} fill="none" stroke="#06b6d4" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />}
-                {node.hasFtlInhibitor && <circle r={planetR + 6} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.75" />}
-
-                <g className="transition-transform duration-200 ease-out group-hover:scale-105" style={{ transformOrigin: 'center', transformBox: 'fill-box' }}>
-                  <PlanetBody node={node} radius={planetR} isSelected={isSelected} claimedColor={node.claimedBy ? nodeColor : null} />
-                </g>
-
-                <OrbitShips ships={node.ships} playerColors={PLAYER_COLORS} players={gameState.players} planetRadius={planetR} />
-
-                {node.groundUnits.length > 0 && (() => {
-                  const groups: { owner: string; count: number }[] = [];
-                  node.groundUnits.forEach((unit) => {
-                    const existing = groups.find((g) => g.owner === unit.owner);
-                    if (existing) existing.count += 1;
-                    else groups.push({ owner: unit.owner, count: 1 });
-                  });
-                  const shadeMap: Record<string, string> = {
-                    green: '#34d399',
-                    blue: '#60a5fa',
-                    purple: '#a78bfa',
-                    yellow: '#fbbf24',
-                  };
-                  return (
-                    <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 8})`} pointerEvents="none">
-                      {groups.map((group, idx) => {
-                        const player = gameState.players.find((p) => p.id === group.owner);
-                        const color = group.owner === 'npc' ? '#94a3b8' : shadeMap[player?.color || 'green'];
-                        return (
-                          <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
-                            <rect x="-5" y="-5" width="10" height="10" fill={color} stroke="#020617" strokeWidth="1" rx="1.5" opacity="0.95" />
-                            {group.count > 1 && (
-                              <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6" fontWeight="bold" fontFamily="monospace">
-                                {group.count}
-                              </text>
-                            )}
-                          </g>
-                        );
-                      })}
-                    </g>
-                  );
-                })()}
-
-                <text
-                  y={planetR + 18}
-                  textAnchor="middle"
-                  fill={isSelected ? '#7dd3fc' : isReachable ? '#fde68a' : '#cbd5e1'}
-                  fontSize="11"
-                  fontWeight={isSelected ? 'bold' : 'normal'}
-                  fontFamily="monospace"
-                  className="pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
-                >
-                  {node.name}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Stellaris-like territory overlay above planets */}
-          {gameState.players.map((player) => {
-            const ownedNodes = gameState.nodes.filter((node) => isNodeVisible(node) && node.claimedBy === player.id);
-            if (ownedNodes.length === 0) return null;
-            const color = PLAYER_COLORS[player.color];
-            const ownedIds = new Set(ownedNodes.map((n) => n.id));
-            return (
-              <g key={`territory-layer-${player.id}`} pointerEvents="none">
-                {ownedNodes.map((node) => (
-                  <g key={`territory-node-${node.id}`}>
-                    <circle cx={node.x} cy={node.y} r={34} fill={color} opacity="0.08" />
-                    <circle cx={node.x} cy={node.y} r={34} fill="none" stroke={color} strokeWidth="1.6" opacity="0.46" />
-                  </g>
-                ))}
-                {ownedNodes.flatMap((node) =>
-                  node.links
-                    .filter((linkId) => ownedIds.has(linkId) && node.id < linkId)
-                    .map((linkId) => {
-                      const targetNode = gameState.nodes.find((n) => n.id === linkId);
-                      if (!targetNode) return null;
-                      return (
-                        <g key={`territory-link-${player.id}-${node.id}-${linkId}`}>
-                          <line
-                            x1={node.x}
-                            y1={node.y}
-                            x2={targetNode.x}
-                            y2={targetNode.y}
-                            stroke={color}
-                            strokeWidth="46"
-                            strokeLinecap="round"
-                            opacity="0.06"
-                          />
-                          <line
-                            x1={node.x}
-                            y1={node.y}
-                            x2={targetNode.x}
-                            y2={targetNode.y}
-                            stroke={color}
-                            strokeWidth="6"
-                            strokeLinecap="round"
-                            opacity="0.22"
-                          />
-                          <line
-                            x1={node.x}
-                            y1={node.y}
-                            x2={targetNode.x}
-                            y2={targetNode.y}
-                            stroke={color}
-                            strokeWidth="2.2"
-                            strokeLinecap="round"
-                            opacity="0.5"
-                          />
-                        </g>
-                      );
-                    })
-                )}
-                {ownedNodes.filter((node) => node.hasShipyard).map((node) => (
-                  <g key={`territory-shipyard-${player.id}-${node.id}`} filter="url(#shipyard-glow)">
-                    <circle cx={node.x} cy={node.y} r={24} fill="none" stroke="#67e8f9" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.95" />
-                    <circle cx={node.x} cy={node.y} r={28} fill="none" stroke="#bae6fd" strokeWidth="0.8" opacity="0.55" />
-                  </g>
-                ))}
-                {ownedNodes.filter((node) => node.hasFtlInhibitor).map((node) => (
-                  <g key={`territory-ftl-${player.id}-${node.id}`} filter="url(#ftl-glow)">
-                    <circle cx={node.x} cy={node.y} r={25} fill="none" stroke="#ef4444" strokeWidth="1.7" opacity="0.95" />
-                    <circle cx={node.x} cy={node.y} r={29} fill="none" stroke="#fecaca" strokeWidth="0.9" strokeDasharray="5 4" opacity="0.55" />
-                  </g>
-                ))}
-              </g>
-            );
-          })}
+        <g ref={viewportRef} transform={`translate(${panX}, ${panY}) scale(${scale})`} style={{ willChange: 'transform' }}>
+          <StaticMapLayer
+            nodes={gameState.nodes}
+            players={gameState.players}
+            visibleNodeIds={visibleNodeIds}
+            links={visibleLinks}
+            ringsCount={ringsCount}
+            maxRadius={maxRadius}
+            centerX={centerX}
+            centerY={centerY}
+            onNodeClick={handleNodeClick}
+          />
+          <DynamicMapLayer
+            nodes={gameState.nodes}
+            players={gameState.players}
+            visibleNodeIds={visibleNodeIds}
+            links={visibleLinks}
+            selectedNodeId={selectedNode?.id ?? null}
+            reachableNodes={reachableNodes}
+            selectedShip={selectedShip}
+          />
         </g>
       </svg>
 

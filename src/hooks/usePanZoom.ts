@@ -35,6 +35,9 @@ export function usePanZoom(
         `translate(${next.panX}, ${next.panY}) scale(${next.scale})`
       );
     }
+    // Keep the background parallax moving during drag without forcing a React re-render
+    // of the entire map layer.
+    window.dispatchEvent(new CustomEvent('spaceconquererz:camera-transform', { detail: next }));
   }, []);
 
   const commitState = useCallback(() => {
