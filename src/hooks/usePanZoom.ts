@@ -17,59 +17,42 @@ export function usePanZoom(
   const [state, setState] = useState<PanZoomState>(initialState);
 
   const stateRef = useRef<PanZoomState>(initialState);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const viewportRef = useRef<SVGGElement | null>(null);
+  const pendingStateRef = useRef<PanZoomState | null>(null);
+  const rafRef = useRef<number | null>(null);
 
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
-  const wheelCommitRaf = useRef<number | null>(null);
-
-  const applyTransform = useCallback((next: PanZoomState) => {
-    stateRef.current = next;
-    if (viewportRef.current) {
-      viewportRef.current.setAttribute(
-        'transform',
-        `translate(${next.panX}, ${next.panY}) scale(${next.scale})`
-      );
-    }
-    // Keep the background parallax moving during drag without forcing a React re-render
-    // of the entire map layer.
-    window.dispatchEvent(new CustomEvent('spaceconquererz:camera-transform', { detail: next }));
-  }, []);
-
-  const commitState = useCallback(() => {
-    setState({ ...stateRef.current });
-  }, []);
-
-  const scheduleCommitState = useCallback(() => {
-    if (wheelCommitRaf.current !== null) return;
-    wheelCommitRaf.current = requestAnimationFrame(() => {
-      wheelCommitRaf.current = null;
-      commitState();
-    });
-  }, [commitState]);
 
   useEffect(() => {
     stateRef.current = state;
-    if (viewportRef.current) {
-      viewportRef.current.setAttribute(
-        'transform',
-        `translate(${state.panX}, ${state.panY}) scale(${state.scale})`
-      );
-    }
   }, [state]);
 
   useEffect(() => {
     return () => {
-      if (wheelCommitRaf.current !== null) cancelAnimationFrame(wheelCommitRaf.current);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
-  // Zoom toward cursor. This can still commit during wheel input, but dragging now avoids
-  // rerendering the whole SVG map every mousemove.
+  // Mouse/touch move events can fire far faster than the browser can paint.
+  // Queue pan/zoom updates to one React state update per animation frame.
+  const scheduleState = useCallback((next: PanZoomState) => {
+    stateRef.current = next;
+    pendingStateRef.current = next;
+    if (rafRef.current !== null) return;
+
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const pending = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (pending) setState(pending);
+    });
+  }, []);
+
+  // Mouse wheel zoom toward cursor
   const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
     e.preventDefault();
     const svgEl = e.currentTarget;
@@ -81,13 +64,12 @@ export function usePanZoom(
     const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
     const worldX = (cx - prev.panX) / prev.scale;
     const worldY = (cy - prev.panY) / prev.scale;
-    applyTransform({
+    scheduleState({
       panX: cx - worldX * newScale,
       panY: cy - worldY * newScale,
       scale: Number(newScale.toFixed(3))
     });
-    scheduleCommitState();
-  }, [minScale, maxScale, applyTransform, scheduleCommitState]);
+  }, [minScale, maxScale, scheduleState]);
 
   const handleStart = useCallback((clientX: number, clientY: number) => {
     isDragging.current = true;
@@ -122,12 +104,12 @@ export function usePanZoom(
     if (!isDragging.current) return;
     const dx = clientX - dragStart.current.x;
     const dy = clientY - dragStart.current.y;
-    applyTransform({
+    scheduleState({
       ...stateRef.current,
       panX: panStart.current.x + dx,
       panY: panStart.current.y + dy
     });
-  }, [applyTransform]);
+  }, [scheduleState]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     handleMove(e.clientX, e.clientY);
@@ -155,37 +137,33 @@ export function usePanZoom(
       const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
       const worldX = (mid.x - prev.panX) / prev.scale;
       const worldY = (mid.y - prev.panY) / prev.scale;
-      applyTransform({
+      scheduleState({
         panX: mid.x - worldX * newScale,
         panY: mid.y - worldY * newScale,
         scale: Number(newScale.toFixed(3))
       });
-      scheduleCommitState();
     }
-  }, [handleMove, minScale, maxScale, applyTransform, scheduleCommitState]);
+  }, [handleMove, minScale, maxScale, scheduleState]);
 
   const handleEnd = useCallback(() => {
-    if (isDragging.current) {
-      isDragging.current = false;
-      commitState();
-    }
+    isDragging.current = false;
     lastTouchDist.current = null;
-  }, [commitState]);
+  }, []);
 
   const reset = useCallback(() => {
     const next = { panX: initialPanX, panY: initialPanY, scale: initialScale };
-    if (wheelCommitRaf.current !== null) {
-      cancelAnimationFrame(wheelCommitRaf.current);
-      wheelCommitRaf.current = null;
+    stateRef.current = next;
+    pendingStateRef.current = null;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
-    applyTransform(next);
     setState(next);
-  }, [initialPanX, initialPanY, initialScale, applyTransform]);
+  }, [initialPanX, initialPanY, initialScale]);
 
   return {
     ...state,
     svgRef,
-    viewportRef,
     handlers: {
       onWheel: handleWheel,
       onMouseDown: handleMouseDown,
