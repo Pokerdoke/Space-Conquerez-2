@@ -564,7 +564,7 @@ export const Map: React.FC<MapProps> = ({
   onMoveShip,
   fogOfWarEnabled,
 }) => {
-  const { panX, panY, scale, handlers, reset } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
+  const { panX, panY, scale, handlers, reset, viewportRef } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
 
   const getPlayerColorHex = (claimedBy: string | null) => {
     if (!claimedBy) return '#475569';
@@ -622,7 +622,7 @@ export const Map: React.FC<MapProps> = ({
 
   return (
     <div className="relative h-full w-full overflow-hidden border border-slate-900 bg-slate-950 touch-none">
-      <GalaxyBackdrop panX={Math.round(panX / 3) * 3} panY={Math.round(panY / 3) * 3} scale={Number(scale.toFixed(2))} />
+      <GalaxyBackdrop panX={0} panY={0} scale={1} />
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <defs>
@@ -652,7 +652,7 @@ export const Map: React.FC<MapProps> = ({
             <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.35" />
           </linearGradient>
         </defs>
-        <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
+        <g ref={viewportRef} transform={`translate(${panX}, ${panY}) scale(${scale})`} style={{ willChange: "transform" }}>
           {/* Grid rings retained from original map style */}
           {Array.from({ length: ringsCount }).map((_, idx) => {
             const radius = ((idx + 1) / ringsCount) * maxRadius;
