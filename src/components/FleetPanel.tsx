@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import type { GameState, StarNode, Ship, GroundUnit } from '../types';
 import { audio } from '../services/audio';
-import { Navigation, PackageOpen, Plus, Minus, Shield } from 'lucide-react';
-import { loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
+import { Navigation, PackageOpen, Plus, Minus, Shield, Recycle } from 'lucide-react';
+import { HealthBar } from './HealthBar';
+import { SHIP_STATS, loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
 
 interface FleetPanelProps {
   node: StarNode;
@@ -85,6 +86,35 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     });
   };
 
+  const handleScrapShip = (ship: Ship) => {
+    const key = troopButtonKey('scrap', ship.id, 'ship');
+    const hasCargo = ship.type === 'Carrier' && (ship.carriedUnits.length > 0 || ship.carriedFighters.length > 0);
+    const canScrap = isMyTurn && ship.owner === myPlayerId && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCargo;
+    if (!canScrap || busyTroops.has(key)) return;
+
+    const refund = Math.floor(SHIP_STATS[ship.type].cost * 0.75);
+    setBusyTroops(prev => new Set(prev).add(key));
+    audio.playBuild();
+
+    const updatedNodes = gameState.nodes.map(n => {
+      if (n.id !== node.id) return n;
+      return { ...n, ships: n.ships.filter(s => s.id !== ship.id) };
+    });
+    const updatedPlayers = gameState.players.map(p => (
+      p.id === myPlayerId ? { ...p, resources: p.resources + refund } : p
+    ));
+
+    if (selectedShip?.id === ship.id) onSelectShip(null);
+    onUpdateState({
+      ...gameState,
+      nodes: updatedNodes,
+      players: updatedPlayers,
+      actionLog: [...gameState.actionLog, `${me.name}: Scrapped ${ship.type} at ${node.name} for ${refund}R.`],
+      lastAction: 'scrap_ship',
+      lastActionAt: new Date().toISOString()
+    });
+  };
+
   const handleLoadTroop = (carrier: Ship, unit: GroundUnit) => {
     const key = troopButtonKey('load', carrier.id, unit.id);
     if (busyTroops.has(key)) return;
@@ -151,6 +181,17 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
               const canMoveThisShip = isMyTurn && isOwner && isMovePhase && ship.canMove && ship.movesLeft > 0;
               const canColonize = isMyTurn && isOwner && gameState.phase === 2 && ship.type === 'ColonyShip' && node.claimedBy === null && node.groundUnits.length === 0;
               const carrierExpanded = expandedCarrierId === ship.id;
+              const scrapKey = troopButtonKey('scrap', ship.id, 'ship');
+              const scrapRefund = Math.floor(SHIP_STATS[ship.type].cost * 0.75);
+              const hasCarrierCargo = ship.type === 'Carrier' && (ship.carriedUnits.length > 0 || ship.carriedFighters.length > 0);
+              const canScrapShip = isMyTurn && isOwner && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCarrierCargo;
+              const scrapDisabledReason = !node.hasShipyard
+                ? 'Requires a friendly shipyard in this system.'
+                : ship.hp < ship.maxHp
+                  ? 'Ship must be at full health before scrapping.'
+                  : hasCarrierCargo
+                    ? 'Unload carrier cargo before scrapping.'
+                    : undefined;
 
               return (
                 <div
@@ -169,8 +210,9 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                           [{getPlayerName(ship.owner)}]
                         </span>
                       </div>
+                      <HealthBar hp={ship.hp} maxHp={ship.maxHp} label="Hull" className="mt-1.5" />
                       <span className="text-[9px] text-slate-500 font-mono block mt-0.5">
-                        HP: {ship.hp}/{ship.maxHp} | DMG: {ship.dmgMin}-{ship.dmgMax} | Speed: {ship.movesLeft}J
+                        DMG: {ship.dmgMin}-{ship.dmgMax} | Speed: {ship.movesLeft}J
                       </span>
                     </div>
 
@@ -197,6 +239,18 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                             className="min-h-[44px] px-2.5 py-1 text-[10px] font-bold uppercase bg-emerald-500/20 border border-emerald-500 text-emerald-400 rounded hover:bg-emerald-500/30"
                           >
                             Colonize
+                          </button>
+                        )}
+
+                        {isOwner && node.hasShipyard && (
+                          <button
+                            onClick={() => handleScrapShip(ship)}
+                            disabled={!canScrapShip || busyTroops.has(scrapKey)}
+                            title={scrapDisabledReason || `Scrap for ${scrapRefund}R (75% refund)`}
+                            className="min-h-[44px] flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold uppercase bg-amber-950/20 border border-amber-700/60 text-amber-300 rounded hover:bg-amber-900/25 disabled:opacity-40 disabled:hover:bg-amber-950/20"
+                          >
+                            <Recycle className="h-3 w-3" />
+                            <span>{busyTroops.has(scrapKey) ? 'Scrapping...' : `Scrap +${scrapRefund}R`}</span>
                           </button>
                         )}
 
@@ -228,7 +282,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                             const key = troopButtonKey('unload', ship.id, unit.id);
                             return (
                               <div key={unit.id} className="flex justify-between gap-2 items-center text-amber-500 font-semibold">
-                                <span>• Troop {idx + 1} ({unit.hp}/{unit.maxHp} HP)</span>
+                                <span className="min-w-[110px]">• Troop {idx + 1}</span><HealthBar hp={unit.hp} maxHp={unit.maxHp} label="HP" className="max-w-[95px]" />
                                 {canManageTroops && (
                                   <button
                                     onClick={() => handleUnloadTroop(ship, unit)}
@@ -258,7 +312,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                               const key = troopButtonKey('unload-fighter', ship.id, fighter.id);
                               return (
                                 <div key={fighter.id} className="flex justify-between gap-2 items-center text-cyan-400 font-semibold">
-                                  <span>• Fighter {idx + 1} ({fighter.hp}/{fighter.maxHp} HP)</span>
+                                  <span className="min-w-[110px]">• Fighter {idx + 1}</span><HealthBar hp={fighter.hp} maxHp={fighter.maxHp} label="HP" className="max-w-[95px]" />
                                   {canManageTroops && (
                                     <button
                                       onClick={() => handleUnloadFighter(ship, fighter)}
@@ -298,7 +352,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                       const full = ship.carriedUnits.length >= 3;
                                       return (
                                         <div key={unit.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded border border-slate-900">
-                                          <span className="text-slate-400 font-mono">Troop {idx + 1} ({unit.hp}/{unit.maxHp} HP)</span>
+                                          <div className="min-w-0 flex-1"><span className="text-slate-400 font-mono block">Troop {idx + 1}</span><HealthBar hp={unit.hp} maxHp={unit.maxHp} label="HP" /></div>
                                           <button
                                             onClick={() => handleLoadTroop(ship, unit)}
                                             disabled={full || busyTroops.has(key)}
@@ -326,7 +380,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                       const full = ship.carriedFighters.length >= 2;
                                       return (
                                         <div key={fighter.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded border border-slate-900">
-                                          <span className="text-cyan-400 font-mono">Fighter {idx + 1} ({fighter.hp}/{fighter.maxHp} HP)</span>
+                                          <div className="min-w-0 flex-1"><span className="text-cyan-400 font-mono block">Fighter {idx + 1}</span><HealthBar hp={fighter.hp} maxHp={fighter.maxHp} label="HP" /></div>
                                           <button
                                             onClick={() => handleLoadFighter(ship, fighter)}
                                             disabled={full || busyTroops.has(key)}
@@ -351,7 +405,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                                       const key = troopButtonKey('unload', ship.id, unit.id);
                                       return (
                                         <div key={unit.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded border border-slate-900">
-                                          <span className="text-amber-500 font-mono">Cargo Troop {idx + 1} ({unit.hp}/{unit.maxHp} HP)</span>
+                                          <div className="min-w-0 flex-1"><span className="text-amber-500 font-mono block">Cargo Troop {idx + 1}</span><HealthBar hp={unit.hp} maxHp={unit.maxHp} label="HP" /></div>
                                           <button
                                             onClick={() => handleUnloadTroop(ship, unit)}
                                             disabled={busyTroops.has(key) || surfaceFull}
@@ -391,7 +445,6 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
         ) : (
           <div className="grid grid-cols-1 gap-2">
             {node.groundUnits.map(unit => {
-              const pct = Math.max(0, Math.min(100, Math.round((unit.hp / unit.maxHp) * 100)));
               const loadCarrier = friendlyCarriers.find(c => c.carriedUnits.length < 3);
               const key = loadCarrier ? troopButtonKey('load', loadCarrier.id, unit.id) : '';
               return (
@@ -401,11 +454,9 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                       <Shield className="h-3.5 w-3.5 text-amber-500" />
                       <span className="text-xs font-bold text-slate-300 font-mono">Ground Unit</span>
                     </div>
-                    <div className="h-1.5 bg-slate-800 rounded mt-1 overflow-hidden">
-                      <div className="h-full bg-amber-500 transition-all" style={{ width: `${pct}%` }} />
-                    </div>
+                    <HealthBar hp={unit.hp} maxHp={unit.maxHp} label="HP" className="mt-1" />
                     <span className="text-[9px] text-slate-500 font-mono block mt-0.5">
-                      HP: {unit.hp}/{unit.maxHp} | DMG: {unit.dmgMin}-{unit.dmgMax}
+                      DMG: {unit.dmgMin}-{unit.dmgMax}
                     </span>
                   </div>
                   <div className="flex flex-col items-end gap-1.5">

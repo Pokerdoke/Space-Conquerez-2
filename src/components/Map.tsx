@@ -632,6 +632,18 @@ export const Map: React.FC<MapProps> = ({
           <filter id="shipyard-glow" x="-80%" y="-80%" width="260%" height="260%">
             <feDropShadow dx="0" dy="0" stdDeviation="2.6" floodColor="#67e8f9" floodOpacity="0.85" />
           </filter>
+          <filter id="ftl-glow" x="-80%" y="-80%" width="260%" height="260%">
+            <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#ef4444" floodOpacity="0.9" />
+            <feDropShadow dx="0" dy="0" stdDeviation="1.2" floodColor="#fecaca" floodOpacity="0.5" />
+          </filter>
+          <filter id="hyperlane-glow" x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="0" stdDeviation="2.2" floodColor="#38bdf8" floodOpacity="0.55" />
+          </filter>
+          <linearGradient id="hyperlane-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#1d4ed8" stopOpacity="0.35" />
+            <stop offset="50%" stopColor="#7dd3fc" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.35" />
+          </linearGradient>
         </defs>
         <g transform={`translate(${panX}, ${panY}) scale(${scale})`}>
           {/* Grid rings retained from original map style */}
@@ -667,28 +679,54 @@ export const Map: React.FC<MapProps> = ({
                   (targetNode.id === selectedNode?.id && reachableNodes[node.id] !== undefined));
 
               return (
-                <g key={`link-${node.id}-${linkId}`} pointerEvents="none">
+                <g key={`link-${node.id}-${linkId}`} pointerEvents="none" opacity={isSelectedPath ? 1 : 0.86}>
                   <line
                     x1={node.x}
                     y1={node.y}
                     x2={targetNode.x}
                     y2={targetNode.y}
-                    stroke={isSelectedPath ? '#facc15' : '#1d4f91'}
-                    strokeWidth={isSelectedPath ? 2.2 : 1.6}
-                    opacity={isSelectedPath ? 0.76 : 0.5}
+                    stroke={isSelectedPath ? '#facc15' : '#164e83'}
+                    strokeWidth={isSelectedPath ? 8 : 6}
+                    strokeLinecap="round"
+                    opacity={isSelectedPath ? 0.18 : 0.12}
+                    filter="url(#hyperlane-glow)"
                   />
                   <line
                     x1={node.x}
                     y1={node.y}
                     x2={targetNode.x}
                     y2={targetNode.y}
-                    stroke={isSelectedPath ? '#fde68a' : '#67e8f9'}
-                    strokeWidth={isSelectedPath ? 1.1 : 0.8}
-                    strokeDasharray={isSelectedPath ? '4 12' : '3 18'}
+                    stroke={isSelectedPath ? '#f59e0b' : '#1e40af'}
+                    strokeWidth={isSelectedPath ? 3.4 : 2.4}
+                    strokeLinecap="round"
+                    opacity={isSelectedPath ? 0.55 : 0.35}
+                  />
+                  <line
+                    x1={node.x}
+                    y1={node.y}
+                    x2={targetNode.x}
+                    y2={targetNode.y}
+                    stroke={isSelectedPath ? '#fde68a' : 'url(#hyperlane-gradient)'}
+                    strokeWidth={isSelectedPath ? 1.6 : 1.15}
+                    strokeLinecap="round"
+                    opacity={isSelectedPath ? 0.95 : 0.72}
+                    filter="url(#hyperlane-glow)"
+                  />
+                  <line
+                    x1={node.x}
+                    y1={node.y}
+                    x2={targetNode.x}
+                    y2={targetNode.y}
+                    stroke={isSelectedPath ? '#fff7ed' : '#bfdbfe'}
+                    strokeWidth={isSelectedPath ? 1.15 : 0.75}
+                    strokeLinecap="round"
+                    strokeDasharray={isSelectedPath ? '5 18' : '2 22'}
                     opacity={isSelectedPath ? 0.9 : 0.55}
                   >
-                    <animate attributeName="stroke-dashoffset" from="18" to="0" dur={isSelectedPath ? '1.4s' : '2.6s'} repeatCount="indefinite" />
+                    <animate attributeName="stroke-dashoffset" from="24" to="0" dur={isSelectedPath ? '1.2s' : '2.4s'} repeatCount="indefinite" />
                   </line>
+                  <circle cx={node.x} cy={node.y} r={isSelectedPath ? 2.1 : 1.35} fill={isSelectedPath ? '#fde68a' : '#93c5fd'} opacity={isSelectedPath ? 0.75 : 0.38} />
+                  <circle cx={targetNode.x} cy={targetNode.y} r={isSelectedPath ? 2.1 : 1.35} fill={isSelectedPath ? '#fde68a' : '#93c5fd'} opacity={isSelectedPath ? 0.75 : 0.38} />
                 </g>
               );
             })
@@ -852,6 +890,12 @@ export const Map: React.FC<MapProps> = ({
                   <g key={`territory-shipyard-${player.id}-${node.id}`} filter="url(#shipyard-glow)">
                     <circle cx={node.x} cy={node.y} r={24} fill="none" stroke="#67e8f9" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.95" />
                     <circle cx={node.x} cy={node.y} r={28} fill="none" stroke="#bae6fd" strokeWidth="0.8" opacity="0.55" />
+                  </g>
+                ))}
+                {ownedNodes.filter((node) => node.hasFtlInhibitor).map((node) => (
+                  <g key={`territory-ftl-${player.id}-${node.id}`} filter="url(#ftl-glow)">
+                    <circle cx={node.x} cy={node.y} r={25} fill="none" stroke="#ef4444" strokeWidth="1.7" opacity="0.95" />
+                    <circle cx={node.x} cy={node.y} r={29} fill="none" stroke="#fecaca" strokeWidth="0.9" strokeDasharray="5 4" opacity="0.55" />
                   </g>
                 ))}
               </g>

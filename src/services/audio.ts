@@ -241,6 +241,39 @@ class AudioEngine {
     }
   }
 
+
+  // Play a clear turn notification ding
+  playTurnDing() {
+    if (!this.enabled) return;
+    try {
+      const ctx = this.initCtx();
+      const now = ctx.currentTime;
+      const notes = [
+        { f: 660, delay: 0, d: 0.18 },
+        { f: 880, delay: 0.12, d: 0.22 },
+        { f: 1320, delay: 0.26, d: 0.32 }
+      ];
+
+      notes.forEach(note => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(note.f, now + note.delay);
+
+        gain.gain.setValueAtTime(this.volume * 0.55, now + note.delay);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + note.delay + note.d);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + note.delay);
+        osc.stop(now + note.delay + note.d);
+      });
+    } catch (e) {
+      console.warn('Audio play failed:', e);
+    }
+  }
+
   // Play game victory fanfare
   playVictory() {
     if (!this.enabled) return;

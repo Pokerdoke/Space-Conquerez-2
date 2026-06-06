@@ -41,6 +41,8 @@ export interface Ship {
   carriedFighters: Ship[];
   /** The most recent system this ship moved from. Used for FTL inhibitor retreat rules. */
   lastNodeId?: string | null;
+  /** Battleships may bombard a planet once per owning player's turn. */
+  bombardedThisTurn?: boolean;
 }
 
 export interface StarNode {

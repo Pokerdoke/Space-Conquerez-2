@@ -224,15 +224,17 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
     <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
       {!canBuild && (
         <div className="text-center text-xs text-slate-500 py-4 bg-slate-950/40 border border-slate-900 rounded font-mono">
-          {!isMyTurn
-            ? 'Build options disabled: Not your active turn'
-            : !isBuildPhase
-              ? 'Build options disabled: Must be in BUILD phase'
-              : 'Build options disabled: System not owned by your Empire'}
+          {!isOwner
+            ? 'Build screen unavailable: System not owned by your Empire'
+            : !isMyTurn
+              ? `View only: Waiting for ${activePlayer?.name || 'another player'}`
+              : !isBuildPhase
+                ? 'View only: Build actions require the BUILD phase'
+                : 'Build options disabled'}
         </div>
       )}
 
-      {canBuild && (
+      {isOwner && (
         <div className="space-y-4">
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
@@ -242,7 +244,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {nextDev ? (
                 <button
                   onClick={handleUpgradePlanet}
-                  disabled={isBusy || me.resources < upgradeCost}
+                  disabled={!canBuild || isBusy || me.resources < upgradeCost}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-indigo-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
@@ -262,7 +264,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasShipyard ? (
                 <button
                   onClick={() => handleBuildStructure('Shipyard')}
-                  disabled={isBusy || me.resources < STRUCTURE_COSTS.Shipyard}
+                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.Shipyard}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-cyan-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
@@ -279,7 +281,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Shipyard')}
-                    disabled={isBusy}
+                    disabled={!canBuild || isBusy}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Shipyard / 2)}R)</span>
@@ -290,7 +292,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasFtlInhibitor ? (
                 <button
                   onClick={() => handleBuildStructure('FtlInhibitor')}
-                  disabled={isBusy || me.resources < STRUCTURE_COSTS.FtlInhibitor}
+                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.FtlInhibitor}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-red-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
@@ -307,7 +309,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('FtlInhibitor')}
-                    disabled={isBusy}
+                    disabled={!canBuild || isBusy}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.FtlInhibitor / 2)}R)</span>
@@ -318,7 +320,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasGateway ? (
                 <button
                   onClick={() => handleBuildStructure('Gateway')}
-                  disabled={isBusy || me.resources < STRUCTURE_COSTS.Gateway}
+                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.Gateway}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-purple-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
                   <div className="text-left">
@@ -335,7 +337,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Gateway')}
-                    disabled={isBusy}
+                    disabled={!canBuild || isBusy}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Gateway / 2)}R)</span>
@@ -349,7 +351,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
               <span>Ground Barracks</span>
               {maxGroundUnits <= 0 ? (
-                <span className="text-red-400 lowercase font-normal italic">Requires City/Metropolis</span>
+                <span className="text-red-400 lowercase font-normal italic">Requires City+</span>
               ) : (
                 <span className={`${groundUnitsCapReached ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>
                   Built: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{groundUnitCapacity}
@@ -387,7 +389,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 return (
                   <button
                     key={type}
-                    disabled={isBusy || !satisfiesShipyard || !canAfford}
+                    disabled={!canBuild || isBusy || !satisfiesShipyard || !canAfford}
                     onClick={() => handleBuildShip(type)}
                     className="flex items-center justify-between p-2 border border-slate-800 bg-slate-950/40 rounded hover:border-cyan-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
                   >

@@ -16,6 +16,62 @@ import type { TutorialScenarioId } from './services/tutorialScenarios';
 import { Sparkles, ArrowRight, Handshake } from 'lucide-react';
 
 
+const HudIconFrame: React.FC<{ children: React.ReactNode; accent: string; glow?: string }> = ({ children, accent, glow }) => (
+  <span
+    className="relative inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-700/80 bg-slate-900/90 text-slate-100 shadow-inner"
+    style={{ boxShadow: glow ? `0 0 10px ${glow}, inset 0 0 0 1px rgba(255,255,255,0.03)` : 'inset 0 0 0 1px rgba(255,255,255,0.03)' }}
+  >
+    <svg viewBox="0 0 24 24" className="absolute inset-0 h-full w-full" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="rgba(8,15,36,0.92)" stroke="rgba(51,65,85,0.9)" />
+      <path d="M5 18.5H19" stroke="rgba(71,85,105,0.85)" strokeWidth="1" />
+      <path d="M6 5.5H18" stroke={accent} strokeOpacity="0.35" strokeWidth="1" />
+    </svg>
+    <span className="relative z-10">{children}</span>
+  </span>
+);
+
+const CreditsHudIcon = () => (
+  <HudIconFrame accent="#f59e0b" glow="rgba(245,158,11,0.2)">
+    <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" aria-hidden="true">
+      <circle cx="12" cy="12" r="6.5" fill="#fcd34d" stroke="#f59e0b" strokeWidth="1.5" />
+      <path d="M9.4 9.5h4.1a1.6 1.6 0 0 1 0 3.2h-3a1.55 1.55 0 0 0 0 3.1h4.15" fill="none" stroke="#7c2d12" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 8.1v8" stroke="#7c2d12" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  </HudIconFrame>
+);
+
+const SystemsHudIcon = () => (
+  <HudIconFrame accent="#38bdf8" glow="rgba(56,189,248,0.18)">
+    <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" aria-hidden="true">
+      <circle cx="7" cy="7" r="2.1" fill="#67e8f9" />
+      <circle cx="16.8" cy="6.4" r="1.8" fill="#60a5fa" />
+      <circle cx="8.4" cy="16.8" r="1.9" fill="#818cf8" />
+      <circle cx="17" cy="15.8" r="2.2" fill="#22d3ee" />
+      <path d="M8.8 7.6l6.1-0.5M8.3 8.8l-0.1 5.5M10.1 16.2l4.7-0.2M15.7 8.1l0.8 5.4" stroke="#dbeafe" strokeWidth="1.2" strokeLinecap="round" opacity="0.9" />
+    </svg>
+  </HudIconFrame>
+);
+
+const NavyHudIcon = () => (
+  <HudIconFrame accent="#818cf8" glow="rgba(129,140,248,0.2)">
+    <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" aria-hidden="true">
+      <path d="M12 4L16.4 14.2L12.8 12.8L12 19.5L11.2 12.8L7.6 14.2L12 4Z" fill="#f8fafc" stroke="#6366f1" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9.8 16.4h4.4" stroke="#a5b4fc" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  </HudIconFrame>
+);
+
+const GarrisonsHudIcon = () => (
+  <HudIconFrame accent="#60a5fa" glow="rgba(96,165,250,0.16)">
+    <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" aria-hidden="true">
+      <path d="M12 4.2L17.6 6V10.5C17.6 14.4 15.2 17.4 12 19.2C8.8 17.4 6.4 14.4 6.4 10.5V6L12 4.2Z" fill="#93c5fd" stroke="#2563eb" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M12 7.4V15.2" stroke="#eff6ff" strokeWidth="1.25" strokeLinecap="round" />
+      <path d="M9.4 10.2H14.6" stroke="#eff6ff" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  </HudIconFrame>
+);
+
+
 export const App: React.FC = () => {
   const [view, setView] = useState<'lobby' | 'game' | 'tutorialGame'>('lobby');
   const [currentCode, setCurrentCode] = useState('');
@@ -33,6 +89,8 @@ export const App: React.FC = () => {
   const [isDiplomacyOpen, setIsDiplomacyOpen] = useState(false);
   const [dbMode, setDbMode] = useState<DbMode>(() => getDbMode());
   const roomUnsubRef = useRef<(() => void) | null>(null);
+  const turnNoticeRef = useRef<string | null>(null);
+  const [showTurnOverlay, setShowTurnOverlay] = useState(false);
 
   // Fog of war setting
   const [fogOfWar, setFogOfWar] = useState(true);
@@ -118,6 +176,24 @@ export const App: React.FC = () => {
       }
     };
   }, []);
+
+  // Notify the local player when their turn begins.
+  useEffect(() => {
+    if (!gameState || gameState.status !== 'playing' || view === 'lobby') return;
+
+    const active = gameState.players[gameState.activePlayerIndex];
+    const marker = `${gameState.roomId}:${gameState.turnNumber}:${gameState.activePlayerIndex}`;
+
+    if (turnNoticeRef.current === marker) return;
+    turnNoticeRef.current = marker;
+
+    if (active?.id === myPlayerId) {
+      setShowTurnOverlay(true);
+      audio.playTurnDing();
+    } else {
+      setShowTurnOverlay(false);
+    }
+  }, [gameState?.roomId, gameState?.turnNumber, gameState?.activePlayerIndex, gameState?.status, myPlayerId, view]);
 
   // Update reachable nodes when ship is selected
   useEffect(() => {
@@ -242,7 +318,7 @@ export const App: React.FC = () => {
 
       gameState.nodes.forEach(node => {
         node.ships.forEach(ship => {
-          if (ship.owner === newActivePlayer.id) ship.movesLeft = ship.type === 'Fighter' ? 0 : 6;
+          if (ship.owner === newActivePlayer.id) ship.movesLeft = ship.type === 'Fighter' ? 0 : 4; ship.bombardedThisTurn = false;
           ship.carriedFighters.forEach(f => { f.movesLeft = 0; });
         });
       });
@@ -420,7 +496,7 @@ export const App: React.FC = () => {
             <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-slate-700/50">
               {/* Credits (Energy Credits) */}
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-base">🪙</span>
+                <CreditsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Credits</span>
                   <div className="flex items-baseline gap-1">
@@ -432,7 +508,7 @@ export const App: React.FC = () => {
 
               {/* Controlled Systems */}
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-base">🌌</span>
+                <SystemsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Systems</span>
                   <span className="text-sm font-bold text-slate-200 font-mono leading-none">{myOwnedNodes.length}</span>
@@ -441,7 +517,7 @@ export const App: React.FC = () => {
 
               {/* Navy Strength */}
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-base">🚀</span>
+                <NavyHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Navy</span>
                   <span className="text-sm font-bold text-indigo-300 font-mono leading-none">{myShipsCount}</span>
@@ -450,7 +526,7 @@ export const App: React.FC = () => {
 
               {/* Ground forces */}
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-base">🛡️</span>
+                <GarrisonsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Garrisons</span>
                   <span className="text-sm font-bold text-amber-500 font-mono leading-none">{myGroundCount}</span>
@@ -587,6 +663,30 @@ export const App: React.FC = () => {
             </span>
             <ArrowRight className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {/* ═══ TURN NOTIFICATION OVERLAY ═══ */}
+      {showTurnOverlay && isMyActiveTurn && gameState.status === 'playing' && (
+        <div
+          onClick={() => setShowTurnOverlay(false)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/72 backdrop-blur-sm cursor-pointer animate-fadeIn"
+          role="button"
+          aria-label="Dismiss your turn notification"
+        >
+          <div className="relative max-w-md w-[90%] border border-cyan-400/50 bg-slate-950/90 rounded-xl px-8 py-7 text-center shadow-[0_0_40px_rgba(34,211,238,0.28)] overflow-hidden">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300 to-transparent" />
+            <div className="text-[10px] font-mono uppercase tracking-[0.35em] text-cyan-300 mb-2">Command Uplink</div>
+            <div className="text-3xl md:text-4xl font-extrabold uppercase tracking-widest text-white drop-shadow-[0_0_18px_rgba(125,211,252,0.55)]">
+              Your Turn
+            </div>
+            <div className="mt-3 text-sm text-slate-300 font-mono">
+              {phaseNames[gameState.phase]} phase · Turn #{gameState.turnNumber}
+            </div>
+            <div className="mt-5 text-[11px] uppercase tracking-wider text-slate-500">
+              Click anywhere to dismiss
+            </div>
+          </div>
         </div>
       )}
 

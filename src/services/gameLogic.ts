@@ -172,11 +172,12 @@ export function createShip(type: Ship['type'], owner: string): Ship {
     dmgMax: stats.dmgMax,
     canMove: type !== 'Fighter',
     blocksMovement: stats.blocksMovement,
-    movesLeft: type === 'Fighter' ? 0 : 6,
+    movesLeft: type === 'Fighter' ? 0 : 4,
     turnsInTerritory: 0,
     carriedUnits: [],
     carriedFighters: [],
-    lastNodeId: null
+    lastNodeId: null,
+    bombardedThisTurn: false
   };
 }
 
@@ -374,6 +375,7 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
   if (centerNode) {
     centerNode.name = 'Dyson Prime';
     centerNode.isDysonSphere = true;
+    centerNode.isNpcPlanet = true;
     centerNode.biome = 'gas';
     centerNode.resourceGeneration = 15;
     // Guarded by high NPC force
@@ -603,6 +605,11 @@ export function resolveSpaceCombat(
     defenderIsCarriedFighter = true;
   }
 
+  const attackerCarrier = attackerNode.ships.find(s =>
+    s.type === 'Carrier' && s.carriedFighters.some(f => f.id === attacker.id)
+  );
+  const attackerIsCarriedFighter = Boolean(attackerCarrier);
+
   const attDmg = rollDamage(attacker.dmgMin, attacker.dmgMax);
   const defDmg = rollDamage(actualDefender.dmgMin, actualDefender.dmgMax);
 
@@ -632,9 +639,14 @@ export function resolveSpaceCombat(
     defender.carriedFighters = defender.carriedFighters.filter(f => f.id !== actualDefender.id);
   }
 
-  // Remove destroyed ships from respective nodes
+  // Remove destroyed ships from respective nodes. Carried fighters live inside their carrier cargo array,
+  // so they need to be removed from the carrier instead of from top-level orbiting ships.
   if (attackerDestroyed) {
-    attackerNode.ships = attackerNode.ships.filter(s => s.id !== attacker.id);
+    if (attackerIsCarriedFighter && attackerCarrier) {
+      attackerCarrier.carriedFighters = attackerCarrier.carriedFighters.filter(f => f.id !== attacker.id);
+    } else {
+      attackerNode.ships = attackerNode.ships.filter(s => s.id !== attacker.id);
+    }
   }
   if (defenderDestroyed && !defenderIsCarriedFighter) {
     defenderNode.ships = defenderNode.ships.filter(s => s.id !== defender.id);
@@ -648,6 +660,90 @@ export function resolveSpaceCombat(
     carriedLossesCount
   };
 }
+
+
+export interface OrbitalBombardmentResult {
+  state: GameState;
+  report: string[];
+  destroyed: boolean;
+  damage: number;
+}
+
+export function canBattleshipBombard(node: StarNode, battleship: Ship, playerId: string, state: Pick<GameState, 'alliances'>): boolean {
+  if (battleship.owner !== playerId || battleship.type !== 'BattleShip' || battleship.hp <= 0 || battleship.bombardedThisTurn) return false;
+  const isHostilePlanet =
+    node.isNpcPlanet ||
+    (node.isDysonSphere && (node.claimedBy === null || isHostileOwner(state, playerId, node.claimedBy))) ||
+    (node.claimedBy !== null && isHostileOwner(state, playerId, node.claimedBy));
+  if (!isHostilePlanet) return false;
+
+  // Bombardment is a pre-invasion action. Once friendly troops are on the surface, fire support stops.
+  if (node.groundUnits.some(g => g.owner === playerId)) return false;
+
+  // Orbit must be cleared first.
+  const hostileCombatShips = node.ships.some(s =>
+    isHostileOwner(state, playerId, s.owner) &&
+    s.type !== 'ColonyShip' &&
+    (s.blocksMovement || s.type === 'Fighter')
+  );
+  if (hostileCombatShips) return false;
+
+  return node.groundUnits.some(g => isHostileOwner(state, playerId, g.owner));
+}
+
+export function resolveOrbitalBombardment(
+  state: GameState,
+  nodeId: string,
+  battleshipId: string,
+  targetGroundUnitId: string,
+  playerId: string
+): OrbitalBombardmentResult | null {
+  const cloned = cloneGameState(state);
+  const node = cloned.nodes.find(n => n.id === nodeId);
+  if (!node) return null;
+  const battleship = node.ships.find(s => s.id === battleshipId);
+  const target = node.groundUnits.find(g => g.id === targetGroundUnitId);
+  if (!battleship || !target) return null;
+  if (!canBattleshipBombard(node, battleship, playerId, cloned)) return null;
+  if (!isHostileOwner(cloned, playerId, target.owner)) return null;
+
+  const damage = rollDamage(battleship.dmgMin, battleship.dmgMax);
+  target.hp = Math.max(0, target.hp - damage);
+  target.turnsInTerritory = 0;
+  battleship.turnsInTerritory = 0;
+  battleship.bombardedThisTurn = true;
+
+  const destroyed = target.hp <= 0;
+  if (destroyed) {
+    node.groundUnits = node.groundUnits.filter(g => g.id !== target.id);
+  }
+
+  const attackerName = cloned.players.find(p => p.id === playerId)?.name || 'Commander';
+  const defenderName = target.owner === 'npc'
+    ? 'Neutral Guardians'
+    : cloned.players.find(p => p.id === target.owner)?.name || 'Enemy';
+  const report = [
+    `[ORBITAL BOMBARDMENT] ${node.name}: ${attackerName}'s BattleShip bombarded ${defenderName} ground troops for ${damage} damage.`,
+    destroyed
+      ? `- DESTROYED: Defender ground unit was vaporized from orbit.`
+      : `- Defender ground unit HP remaining: ${target.hp}/${target.maxHp}`,
+    `- BattleShip can no longer bombard this turn.`
+  ];
+
+  return {
+    state: {
+      ...cloned,
+      nodes: cloned.nodes,
+      actionLog: [...cloned.actionLog, ...report],
+      lastAction: 'orbital_bombardment',
+      lastActionAt: currentTimestamp()
+    },
+    report,
+    destroyed,
+    damage
+  };
+}
+
 
 // Ground Combat Resolution
 export function resolveGroundCombat(
@@ -837,7 +933,10 @@ export interface InvasionResult {
 }
 
 function canInvadeNode(node: StarNode, playerId: string, state?: Pick<GameState, 'alliances'>): boolean {
-  return node.isNpcPlanet || (node.claimedBy !== null && isHostileOwner(state || { alliances: [] }, playerId, node.claimedBy));
+  const diplomacyState = state || { alliances: [] };
+  const hostileOwner = node.claimedBy !== null && isHostileOwner(diplomacyState, playerId, node.claimedBy);
+  const unclaimedDysonPrime = node.isDysonSphere && node.claimedBy === null;
+  return node.isNpcPlanet || unclaimedDysonPrime || hostileOwner;
 }
 
 // Drops every ground unit from every friendly carrier over the selected enemy/NPC planet.
