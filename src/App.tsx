@@ -93,7 +93,7 @@ export const App: React.FC = () => {
   const [showTurnOverlay, setShowTurnOverlay] = useState(false);
 
   // Fog of war setting
-  const [fogOfWar, setFogOfWar] = useState(true);
+  const [fogOfWar, setFogOfWar] = useState(false);
 
   const refreshSelectionsFromState = (state: GameState) => {
     setSelectedNode(prev => {

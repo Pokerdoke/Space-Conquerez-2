@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 interface PanZoomState {
   panX: number;
@@ -13,11 +13,12 @@ export function usePanZoom(
   initialPanY = 0,
   initialScale = 0.8
 ) {
-  const [state, setState] = useState<PanZoomState>({
-    panX: initialPanX,
-    panY: initialPanY,
-    scale: initialScale
-  });
+  const initialState = { panX: initialPanX, panY: initialPanY, scale: initialScale };
+  const [state, setState] = useState<PanZoomState>(initialState);
+
+  const stateRef = useRef<PanZoomState>(initialState);
+  const pendingStateRef = useRef<PanZoomState | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const isDragging = useRef(false);
@@ -25,6 +26,31 @@ export function usePanZoom(
   const panStart = useRef({ x: 0, y: 0 });
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchMid = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // Mouse/touch move events can fire far faster than the browser can paint.
+  // Queue pan/zoom updates to one React state update per animation frame.
+  const scheduleState = useCallback((next: PanZoomState) => {
+    stateRef.current = next;
+    pendingStateRef.current = next;
+    if (rafRef.current !== null) return;
+
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const pending = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (pending) setState(pending);
+    });
+  }, []);
 
   // Mouse wheel zoom toward cursor
   const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
@@ -34,27 +60,21 @@ export function usePanZoom(
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
     const factor = e.deltaY < 0 ? 1.08 : 0.92;
-    setState(prev => {
-      const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
-      const worldX = (cx - prev.panX) / prev.scale;
-      const worldY = (cy - prev.panY) / prev.scale;
-      return {
-        panX: cx - worldX * newScale,
-        panY: cy - worldY * newScale,
-        scale: Number(newScale.toFixed(3))
-      };
+    const prev = stateRef.current;
+    const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
+    const worldX = (cx - prev.panX) / prev.scale;
+    const worldY = (cy - prev.panY) / prev.scale;
+    scheduleState({
+      panX: cx - worldX * newScale,
+      panY: cy - worldY * newScale,
+      scale: Number(newScale.toFixed(3))
     });
-  }, [minScale, maxScale]);
+  }, [minScale, maxScale, scheduleState]);
 
   const handleStart = useCallback((clientX: number, clientY: number) => {
     isDragging.current = true;
     dragStart.current = { x: clientX, y: clientY };
-    panStart.current = { x: 0, y: 0 };
-    // capture current pan
-    setState(prev => {
-      panStart.current = { x: prev.panX, y: prev.panY };
-      return prev;
-    });
+    panStart.current = { x: stateRef.current.panX, y: stateRef.current.panY };
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -84,12 +104,12 @@ export function usePanZoom(
     if (!isDragging.current) return;
     const dx = clientX - dragStart.current.x;
     const dy = clientY - dragStart.current.y;
-    setState(prev => ({
-      ...prev,
+    scheduleState({
+      ...stateRef.current,
       panX: panStart.current.x + dx,
       panY: panStart.current.y + dy
-    }));
-  }, []);
+    });
+  }, [scheduleState]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     handleMove(e.clientX, e.clientY);
@@ -112,18 +132,18 @@ export function usePanZoom(
       const factor = dist / lastTouchDist.current;
       lastTouchDist.current = dist;
       lastTouchMid.current = mid;
-      setState(prev => {
-        const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
-        const worldX = (mid.x - prev.panX) / prev.scale;
-        const worldY = (mid.y - prev.panY) / prev.scale;
-        return {
-          panX: mid.x - worldX * newScale,
-          panY: mid.y - worldY * newScale,
-          scale: Number(newScale.toFixed(3))
-        };
+
+      const prev = stateRef.current;
+      const newScale = Math.max(minScale, Math.min(maxScale, prev.scale * factor));
+      const worldX = (mid.x - prev.panX) / prev.scale;
+      const worldY = (mid.y - prev.panY) / prev.scale;
+      scheduleState({
+        panX: mid.x - worldX * newScale,
+        panY: mid.y - worldY * newScale,
+        scale: Number(newScale.toFixed(3))
       });
     }
-  }, [handleMove, minScale, maxScale]);
+  }, [handleMove, minScale, maxScale, scheduleState]);
 
   const handleEnd = useCallback(() => {
     isDragging.current = false;
@@ -131,7 +151,14 @@ export function usePanZoom(
   }, []);
 
   const reset = useCallback(() => {
-    setState({ panX: initialPanX, panY: initialPanY, scale: initialScale });
+    const next = { panX: initialPanX, panY: initialPanY, scale: initialScale };
+    stateRef.current = next;
+    pendingStateRef.current = null;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    setState(next);
   }, [initialPanX, initialPanY, initialScale]);
 
   return {

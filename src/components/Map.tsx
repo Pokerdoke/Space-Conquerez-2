@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
@@ -82,13 +82,13 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
   const parallaxStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
 
   if (starsRef.current.length === 0) {
-    starsRef.current = Array.from({ length: 460 }, () => ({
+    starsRef.current = Array.from({ length: 280 }, () => ({
       x: Math.random(),
       y: Math.random(),
       r: 0.45 + Math.random() * 1.2,
       o: 0.28 + Math.random() * 0.62,
     }));
-    parallaxStarsRef.current = Array.from({ length: 90 }, () => ({
+    parallaxStarsRef.current = Array.from({ length: 45 }, () => ({
       x: Math.random(),
       y: Math.random(),
       r: 0.9 + Math.random() * 1.35,
@@ -129,7 +129,7 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
 
     const drawHexGrid = (width: number, height: number, worldOffsetX: number, worldOffsetY: number) => {
       ctx.save();
-      const radius = 62;
+      const radius = 74;
       const horiz = Math.sqrt(3) * radius;
       const vert = radius * 1.5;
       const startX = -((((worldOffsetX * 0.1) % horiz) + horiz) % horiz) - horiz * 2;
@@ -191,7 +191,7 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
     const draw = () => {
       const width = host.clientWidth;
       const height = host.clientHeight;
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = 1;
       const targetW = Math.max(1, Math.floor(width * dpr));
       const targetH = Math.max(1, Math.floor(height * dpr));
       if (canvas.width !== targetW || canvas.height !== targetH) {
@@ -572,13 +572,11 @@ export const Map: React.FC<MapProps> = ({
     return player ? PLAYER_COLORS[player.color] : '#475569';
   };
 
-  const isNodeVisible = (node: StarNode) => {
-    if (!fogOfWarEnabled) return true;
-    const isMine = node.claimedBy === myPlayerId;
-    const hasMyUnits =
-      node.ships.some((s) => s.owner === myPlayerId) ||
-      node.groundUnits.some((g) => g.owner === myPlayerId);
-    if (isMine || hasMyUnits) return true;
+  const visibleNodeIds = useMemo(() => {
+    if (!fogOfWarEnabled) {
+      return new Set(gameState.nodes.map((node) => node.id));
+    }
+
     const myNodeIds = new Set(
       gameState.nodes
         .filter(
@@ -589,8 +587,17 @@ export const Map: React.FC<MapProps> = ({
         )
         .map((n) => n.id)
     );
-    return node.links.some((linkId) => myNodeIds.has(linkId));
-  };
+
+    const visible = new Set(myNodeIds);
+    for (const node of gameState.nodes) {
+      if (node.links.some((linkId) => myNodeIds.has(linkId))) {
+        visible.add(node.id);
+      }
+    }
+    return visible;
+  }, [fogOfWarEnabled, gameState.nodes, myPlayerId]);
+
+  const isNodeVisible = (node: StarNode) => visibleNodeIds.has(node.id);
 
   const handleNodeClick = (node: StarNode) => {
     audio.playBeep(500, 0.05);
@@ -615,7 +622,7 @@ export const Map: React.FC<MapProps> = ({
 
   return (
     <div className="relative h-full w-full overflow-hidden border border-slate-900 bg-slate-950 touch-none">
-      <GalaxyBackdrop panX={panX} panY={panY} scale={scale} />
+      <GalaxyBackdrop panX={Math.round(panX / 3) * 3} panY={Math.round(panY / 3) * 3} scale={Number(scale.toFixed(2))} />
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <defs>
