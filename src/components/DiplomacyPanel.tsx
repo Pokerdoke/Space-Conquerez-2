@@ -26,22 +26,29 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
     .filter(a => a.status === 'breaking' && a.playerIds.includes(myPlayerId))
     .map(a => a.playerIds.find(id => id !== myPlayerId) || '')), [gameState.alliances, myPlayerId]);
 
-  const updateAlliance = async (otherId: string, action: 'form' | 'break') => {
+  const updateAlliance = async (otherId: string, action: 'request' | 'accept' | 'cancel' | 'break') => {
     if (!me) return;
     audio.playBeep(650, 0.06);
     const other = gameState.players.find(p => p.id === otherId);
     const alliances = [...(gameState.alliances || [])];
-    let nextAlliances: Alliance[] = alliances;
     const existing = alliances.find(a => a.playerIds.includes(myPlayerId) && a.playerIds.includes(otherId));
+    let nextAlliances: Alliance[] = alliances;
     const log: string[] = [];
 
-    if (action === 'form') {
-      if (existing?.status === 'active') return;
-      nextAlliances = alliances.filter(a => !(a.playerIds.includes(myPlayerId) && a.playerIds.includes(otherId)));
-      nextAlliances.push({ id: generateId(), playerIds: [myPlayerId, otherId], status: 'active' });
-      log.push(`${me.name} formed an alliance with ${other?.name || 'another empire'}. FTL inhibitors are now friendly and combat is blocked between them.`);
+    if (action === 'request') {
+      if (existing) return;
+      nextAlliances = [...alliances, { id: generateId(), playerIds: [myPlayerId, otherId], status: 'requested', requestedBy: myPlayerId }];
+      log.push(`${me.name} sent an alliance request to ${other?.name || 'another empire'}.`);
+    } else if (action === 'accept') {
+      if (!existing || existing.status !== 'requested' || existing.requestedBy === myPlayerId) return;
+      nextAlliances = alliances.map(a => a.id === existing.id ? { ...a, status: 'active', requestedBy: undefined } : a);
+      log.push(`${me.name} accepted ${other?.name || 'another empire'}'s alliance request. FTL inhibitors are friendly and combat is blocked between allies.`);
+    } else if (action === 'cancel') {
+      if (!existing || existing.status !== 'requested') return;
+      nextAlliances = alliances.filter(a => a.id !== existing.id);
+      log.push(`${me.name} cancelled the alliance request with ${other?.name || 'another empire'}.`);
     } else {
-      if (!existing) return;
+      if (!existing || existing.status !== 'active') return;
       nextAlliances = alliances.filter(a => a.id !== existing.id);
       log.push(`${me.name} ended the alliance with ${other?.name || 'another empire'}.`);
     }
@@ -50,8 +57,9 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
       ...gameState,
       alliances: nextAlliances,
       actionLog: [...gameState.actionLog, ...log],
-      lastAction: action === 'form' ? 'alliance_formed' : 'alliance_break_requested',
-      lastActionAt: new Date().toISOString()
+      lastAction: action === 'request' ? 'alliance_requested' : action === 'accept' ? 'alliance_accepted' : action === 'cancel' ? 'alliance_request_cancelled' : 'alliance_ended',
+      lastActionAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
     });
   };
 
@@ -68,17 +76,20 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
 
         <div className="p-4 space-y-3">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Allies can pass through each other's FTL inhibitors and cannot invade or fire on each other. Alliances can be ended at any time in real time.
+            Send an alliance request first. The other commander must accept it before alliance rules activate.
           </p>
           {opponents.map(player => {
+            const alliance = (gameState.alliances || []).find(a => a.playerIds.includes(myPlayerId) && a.playerIds.includes(player.id));
             const allied = isAllied(gameState, myPlayerId, player.id);
             const pendingBreak = pendingBreakIds.has(player.id);
+            const requestFromMe = alliance?.status === 'requested' && alliance.requestedBy === myPlayerId;
+            const requestToMe = alliance?.status === 'requested' && alliance.requestedBy !== myPlayerId;
             return (
               <div key={player.id} className={`p-3 rounded border ${colorClass[player.color]} flex items-center justify-between gap-3`}>
                 <div>
                   <div className="font-bold text-sm">{player.name}</div>
                   <div className="text-[10px] font-mono opacity-80">
-                    {pendingBreak ? 'Alliance ending' : allied ? 'Alliance active' : 'No alliance'}
+                    {pendingBreak ? 'Alliance ending' : allied ? 'Alliance active' : requestFromMe ? 'Request sent' : requestToMe ? 'Request received' : 'No alliance'}
                   </div>
                 </div>
                 {allied || pendingBreak ? (
@@ -89,12 +100,26 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
                   >
                     <ShieldX className="h-3.5 w-3.5" /> Break
                   </button>
-                ) : (
+                ) : requestToMe ? (
                   <button
-                    onClick={() => updateAlliance(player.id, 'form')}
+                    onClick={() => updateAlliance(player.id, 'accept')}
                     className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-emerald-500/50 bg-emerald-950/30 text-emerald-300 flex items-center gap-1"
                   >
-                    <Handshake className="h-3.5 w-3.5" /> Ally
+                    <Handshake className="h-3.5 w-3.5" /> Accept
+                  </button>
+                ) : requestFromMe ? (
+                  <button
+                    onClick={() => updateAlliance(player.id, 'cancel')}
+                    className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-slate-600 bg-slate-900/60 text-slate-300 flex items-center gap-1"
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => updateAlliance(player.id, 'request')}
+                    className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-emerald-500/50 bg-emerald-950/30 text-emerald-300 flex items-center gap-1"
+                  >
+                    <Handshake className="h-3.5 w-3.5" /> Request
                   </button>
                 )}
               </div>

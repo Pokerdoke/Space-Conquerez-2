@@ -77,8 +77,9 @@ export type GalaxyType = 'spiral2' | 'spiral3' | 'spiral4' | 'ring' | 'circular'
 export interface Alliance {
   id: string;
   playerIds: [string, string];
-  status: 'active' | 'breaking';
+  status: 'requested' | 'active' | 'breaking';
   breakRequestedBy?: string;
+  requestedBy?: string;
   breakEffectiveAfterPlayerId?: string;
 }
 

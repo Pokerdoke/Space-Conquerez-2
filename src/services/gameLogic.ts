@@ -22,6 +22,52 @@ export const SHIP_STATS = {
 
 export const GROUND_UNIT_STATS = { cost: 3, hp: 10, dmgMin: 1, dmgMax: 4 };
 
+export const SHIP_UPKEEP: Record<Ship['type'], number> = {
+  Fighter: 0.15,
+  ColonyShip: 0.25,
+  Destroyer: 0.35,
+  Carrier: 0.45,
+  BattleShip: 0.65
+};
+
+export const GROUND_UNIT_UPKEEP = 0.08;
+
+export function getPlayerEconomySummary(state: Pick<GameState, 'nodes'>, playerId: string) {
+  const grossPerIncomeTick = state.nodes.reduce((sum, node) => sum + getEffectiveResourceGeneration(node, playerId), 0);
+  let shipUpkeep = 0;
+  let armyUpkeep = 0;
+
+  for (const node of state.nodes) {
+    for (const ship of node.ships) {
+      if (ship.owner === playerId) {
+        shipUpkeep += SHIP_UPKEEP[ship.type] || 0;
+        for (const fighter of ship.carriedFighters || []) {
+          if (fighter.owner === playerId) shipUpkeep += SHIP_UPKEEP.Fighter;
+        }
+        for (const unit of ship.carriedUnits || []) {
+          if (unit.owner === playerId) armyUpkeep += GROUND_UNIT_UPKEEP;
+        }
+      }
+    }
+    for (const unit of node.groundUnits) {
+      if (unit.owner === playerId) armyUpkeep += GROUND_UNIT_UPKEEP;
+    }
+  }
+
+  const upkeepPerIncomeTick = Number((shipUpkeep + armyUpkeep).toFixed(2));
+  const revenuePerIncomeTick = Math.max(0, Math.ceil(grossPerIncomeTick / 2));
+  const netPerIncomeTick = Math.max(0, Number((revenuePerIncomeTick - upkeepPerIncomeTick).toFixed(2)));
+
+  return {
+    grossPerIncomeTick,
+    revenuePerIncomeTick,
+    upkeepPerIncomeTick,
+    shipUpkeep: Number(shipUpkeep.toFixed(2)),
+    armyUpkeep: Number(armyUpkeep.toFixed(2)),
+    netPerIncomeTick
+  };
+}
+
 const PLANET_BIOMES: PlanetBiome[] = ['ocean', 'tropical', 'continental', 'savannah', 'desert', 'arid', 'tundra', 'alpine', 'arctic', 'gas', 'rock'];
 
 function pickBiome(index: number, isSpecial = false): PlanetBiome {
@@ -1607,6 +1653,155 @@ export function resolveGroundCombatRound(
   };
 }
 
+
+function getShipPriorityValue(ship: Pick<Ship, 'type'>): number {
+  if (ship.type === 'BattleShip') return 5;
+  if (ship.type === 'Destroyer') return 4;
+  if (ship.type === 'Fighter') return 3;
+  if (ship.type === 'Carrier') return 2;
+  if (ship.type === 'ColonyShip') return 1;
+  return 0;
+}
+
+function findAutoShipCombatant(node: StarNode, shipId: string): { ship: Ship; isCarriedFighter: boolean; carrier?: Ship } | null {
+  const topLevel = node.ships.find(s => s.id === shipId);
+  if (topLevel) return { ship: topLevel, isCarriedFighter: false };
+  for (const carrier of node.ships) {
+    const carried = carrier.carriedFighters.find(f => f.id === shipId);
+    if (carried) return { ship: carried, isCarriedFighter: true, carrier };
+  }
+  return null;
+}
+
+function getAutoAttackOptions(node: StarNode, playerId: string): Ship[] {
+  const topLevel = node.ships.filter(s => s.owner === playerId && s.hp > 0 && s.dmgMax > 0 && s.type !== 'ColonyShip');
+  const carriedFighters = node.ships
+    .filter(s => s.owner === playerId && s.type === 'Carrier')
+    .flatMap(carrier => carrier.carriedFighters.filter(f => f.hp > 0 && f.dmgMax > 0));
+  return [...topLevel, ...carriedFighters].sort((a, b) => getShipPriorityValue(b) - getShipPriorityValue(a));
+}
+
+function getAutoDefenderOptions(state: Pick<GameState, 'alliances'>, node: StarNode, playerId: string): Ship[] {
+  return node.ships
+    .filter(s => isHostileOwner(state, playerId, s.owner) && s.hp > 0)
+    .sort((a, b) => getShipPriorityValue(b) - getShipPriorityValue(a));
+}
+
+export function autoResolveSpaceBattle(state: GameState, nodeId: string, playerId: string) {
+  const next = cloneGameState(state);
+  const node = next.nodes.find(n => n.id === nodeId);
+  const player = next.players.find(p => p.id === playerId);
+  if (!node || !player) return { state, report: [], changed: false };
+
+  const report: string[] = [];
+  let rounds = 0;
+  while (rounds < 80) {
+    const attackerChoice = getAutoAttackOptions(node, playerId)[0];
+    const defender = getAutoDefenderOptions(next, node, playerId)[0];
+    if (!attackerChoice || !defender) break;
+
+    const attackerRef = findAutoShipCombatant(node, attackerChoice.id);
+    if (!attackerRef) break;
+    const result = resolveSpaceCombat(attackerRef.ship, defender, node, node);
+    rounds += 1;
+    report.push(`[AUTO SPACE] ${player.name}'s ${attackerRef.ship.type} attacked ${defender.owner === 'npc' ? 'Neutral' : next.players.find(p => p.id === defender.owner)?.name || 'enemy'} ${defender.type}: ${result.attackerDmg} dealt / ${result.defenderDmg} returned.`);
+    if (result.defenderDestroyed) report.push(`- DESTROYED: enemy ${defender.type}.`);
+    if (result.attackerDestroyed) report.push(`- LOST: ${player.name}'s ${attackerRef.ship.type}.`);
+  }
+
+  const hostileRemain = node.ships.some(s => isHostileOwner(next, playerId, s.owner));
+  if (rounds === 0) return { state, report: [], changed: false };
+  report.push(hostileRemain ? `Auto battle paused: enemy ships remain in ${node.name}.` : `Orbit cleared at ${node.name}.`);
+  const timestamp = currentTimestamp();
+  return {
+    state: {
+      ...next,
+      actionLog: [...next.actionLog, ...report].slice(-100),
+      activeCombatNodeId: hostileRemain ? node.id : null,
+      activeCombatUpdatedAt: timestamp,
+      activeCombatSummary: hostileRemain ? report[report.length - 1] : undefined,
+      lastAction: hostileRemain ? 'auto_space_battle' : 'auto_space_battle_cleared',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    },
+    report,
+    changed: true
+  };
+}
+
+export function autoResolvePlanetInvasion(state: GameState, nodeId: string, playerId: string) {
+  let result = invadePlanetWithCarriers(state, nodeId, playerId);
+  let next = result.state;
+  const report = [...result.report];
+  let node = next.nodes.find(n => n.id === nodeId);
+  if (!node) return { state, report: [], changed: false };
+
+  let rounds = 0;
+  while (rounds < 100) {
+    node = next.nodes.find(n => n.id === nodeId);
+    if (!node) break;
+    const attacker = node.groundUnits.find(g => g.owner === playerId);
+    const defender = node.groundUnits.find(g => isHostileOwner(next, playerId, g.owner));
+    if (!attacker || !defender) break;
+    const round = resolveGroundCombatRound(next, nodeId, attacker.id, defender.id, playerId);
+    if (!round) break;
+    next = round.state;
+    report.push(...round.report);
+    rounds += 1;
+    if (round.captured || round.failed) break;
+  }
+
+  node = next.nodes.find(n => n.id === nodeId);
+  const captured = Boolean(node && node.claimedBy === playerId && !node.groundUnits.some(g => isHostileOwner(next, playerId, g.owner)));
+  const hostileGroundRemain = Boolean(node?.groundUnits.some(g => isHostileOwner(next, playerId, g.owner)));
+  const changed = result.state !== state || rounds > 0;
+  if (!changed) return { state, report: [], changed: false };
+
+  if (captured) report.push(`Auto invasion complete: ${node?.name || 'planet'} captured.`);
+  else if (hostileGroundRemain) report.push(`Auto invasion paused: hostile garrison remains.`);
+  else report.push(`Auto invasion complete.`);
+
+  const timestamp = currentTimestamp();
+  return {
+    state: {
+      ...next,
+      actionLog: [...next.actionLog, ...report].slice(-100),
+      activeCombatNodeId: hostileGroundRemain ? nodeId : null,
+      activeCombatUpdatedAt: timestamp,
+      activeCombatSummary: hostileGroundRemain ? report[report.length - 1] : undefined,
+      lastAction: captured ? 'auto_invasion_captured' : 'auto_invasion',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    },
+    report,
+    changed: true
+  };
+}
+
+export function fullyLoadCarrierFromPlanet(state: GameState, nodeId: string, carrierId: string, playerId: string): GameState {
+  const next = cloneGameState(state);
+  const node = next.nodes.find(n => n.id === nodeId);
+  const player = next.players.find(p => p.id === playerId);
+  if (!node || !player || node.claimedBy !== playerId) return state;
+  const carrier = node.ships.find(s => s.id === carrierId && s.owner === playerId && s.type === 'Carrier');
+  if (!carrier) return state;
+  const slots = Math.max(0, 3 - carrier.carriedUnits.length);
+  if (slots === 0) return state;
+  const toLoad = node.groundUnits.filter(g => g.owner === playerId).slice(0, slots);
+  if (toLoad.length === 0) return state;
+  const loadIds = new Set(toLoad.map(u => u.id));
+  node.groundUnits = node.groundUnits.filter(g => !loadIds.has(g.id));
+  carrier.carriedUnits = [...carrier.carriedUnits, ...toLoad];
+  const timestamp = currentTimestamp();
+  return {
+    ...next,
+    actionLog: [...next.actionLog, `${player.name}: Fully loaded ${toLoad.length} troop(s) into Carrier at ${node.name}.`].slice(-100),
+    lastAction: 'fully_load_carrier',
+    lastActionAt: timestamp,
+    lastUpdated: timestamp
+  };
+}
+
 // Check Win Conditions
 // 1. Domination: Claim 70% or more of the map nodes
 // 2. Eradication: Destroy all enemy homeworld nodes (homeworld claimed by others)
@@ -1651,7 +1846,7 @@ export function checkWinCondition(state: GameState): Player | null {
 
   return null;
 }
-export const REALTIME_INCOME_INTERVAL_SECONDS = 20;
+export const REALTIME_INCOME_INTERVAL_SECONDS = 10;
 
 export function processRealtimeIncome(state: GameState, nowMs = Date.now()): { state: GameState; changed: boolean } {
   if (state.status !== 'playing') return { state, changed: false };
@@ -1689,9 +1884,9 @@ export function processRealtimeIncome(state: GameState, nowMs = Date.now()): { s
   }
 
   const players = state.players.map(player => {
-    const fullIncome = nodes.reduce((sum, node) => sum + getEffectiveResourceGeneration(node, player.id), 0);
-    const incomePerTick = Math.max(1, Math.ceil(fullIncome / 2));
-    return { ...player, resources: player.resources + incomePerTick * ticks };
+    const economy = getPlayerEconomySummary({ nodes }, player.id);
+    const amount = Number((economy.netPerIncomeTick * ticks).toFixed(2));
+    return { ...player, resources: Number((player.resources + amount).toFixed(2)) };
   });
 
   if (ticks > 0) {

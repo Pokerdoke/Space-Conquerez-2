@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { resolveSpaceCombat, invadePlanetWithCarriers, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, isHostileOwner, REALTIME_ACTION_SECONDS } from '../services/gameLogic';
+import { resolveSpaceCombat, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, isHostileOwner, REALTIME_ACTION_SECONDS, autoResolveSpaceBattle, autoResolvePlanetInvasion } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Swords, ShieldAlert, Crosshair, Eye } from 'lucide-react';
 import { HealthBar } from './HealthBar';
@@ -90,6 +90,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   const [combatReport, setCombatReport] = useState<string[]>([]);
   const [firingLaser, setFiringLaser] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [combatShipsOpen, setCombatShipsOpen] = useState(true);
   const [lockedShipAttackerId, setLockedShipAttackerId] = useState<string | null>(null);
   const [lockedGroundAttackerId, setLockedGroundAttackerId] = useState<string | null>(null);
 
@@ -168,12 +169,19 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     || gameState.activeCombatNodeId === node.id
   );
 
-  const stampCombatState = (state: GameState, summary: string): GameState => ({
-    ...state,
-    activeCombatNodeId: node.id,
-    activeCombatUpdatedAt: new Date().toISOString(),
-    activeCombatSummary: summary
-  });
+  const stampCombatState = (state: GameState, summary: string): GameState => {
+    const combatNode = state.nodes.find(n => n.id === node.id);
+    const hostileShipsRemain = Boolean(combatNode?.ships.some(s => isHostileOwner(state, perspectivePlayerId, s.owner)));
+    const hostileGroundRemain = Boolean(combatNode?.groundUnits.some(g => isHostileOwner(state, perspectivePlayerId, g.owner)));
+    const friendlyGroundRemain = Boolean(combatNode?.groundUnits.some(g => g.owner === perspectivePlayerId));
+    const stillActive = hostileShipsRemain || (hostileGroundRemain && friendlyGroundRemain);
+    return {
+      ...state,
+      activeCombatNodeId: stillActive ? node.id : null,
+      activeCombatUpdatedAt: new Date().toISOString(),
+      activeCombatSummary: stillActive ? summary : undefined
+    };
+  };
 
   const handleSpaceCombat = () => {
     if (!isMyTurn || !selectedAttackerShipId || !selectedDefenderShipId || busyAction) return;
@@ -237,6 +245,24 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
+  const handleAutoSpaceCombat = async () => {
+    if (!spaceCombatAvailable || busyAction) return;
+    setBusyAction('auto-space');
+    setFiringLaser(true);
+    audio.playLaser();
+    try {
+      const result = autoResolveSpaceBattle(gameState, node.id, perspectivePlayerId);
+      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
+      if (result.changed) {
+        if (!result.state.activeCombatNodeId) audio.playExplosion();
+        await onUpdateState(result.state);
+      }
+    } finally {
+      setFiringLaser(false);
+      setBusyAction(null);
+    }
+  };
+
   const handleOrbitalBombardment = async () => {
     if (!isMyTurn || !selectedBombardShipId || !selectedBombardTargetId || busyAction) return;
     if (!canBombardPlanet) return;
@@ -263,25 +289,36 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
-  const handleInvadePlanet = async () => {
+  const handleAutoInvadePlanet = async () => {
     if (!canInvadePlanet || busyAction) return;
-    setBusyAction('invade');
+    setBusyAction('auto-invade');
     audio.playMove();
-    setTimeout(async () => {
-      try {
-        const result = invadePlanetWithCarriers(gameState, node.id, myPlayerId);
-        if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
-        if (result.captured) { audio.playVictory(); setLockedGroundAttackerId(null); }
-        if (result.startedGroundCombat) {
-          setSelectedAttackerGroundId(null);
-          setSelectedDefenderGroundId(null);
-        }
-        const summary = result.report[0] || `${getPlayerName(myPlayerId)} began an invasion at ${node.name}.`;
-        await onUpdateState(stampCombatState(result.state, summary));
-      } finally {
-        setBusyAction(null);
+    try {
+      const result = autoResolvePlanetInvasion(gameState, node.id, myPlayerId);
+      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
+      if (result.changed) {
+        if (!result.state.activeCombatNodeId) audio.playVictory();
+        await onUpdateState(result.state);
       }
-    }, REALTIME_ACTION_SECONDS.combatRound * 1000);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleAutoGroundCombat = async () => {
+    if (!groundCombatAvailable || busyAction) return;
+    setBusyAction('auto-ground');
+    audio.playBeep(240, 0.12);
+    try {
+      const result = autoResolvePlanetInvasion(gameState, node.id, myPlayerId);
+      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
+      if (result.changed) {
+        if (!result.state.activeCombatNodeId) audio.playVictory();
+        await onUpdateState(result.state);
+      }
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const handleGroundCombat = () => {
@@ -437,12 +474,12 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             </div>
           )}
           <button
-            onClick={handleInvadePlanet}
+            onClick={handleAutoInvadePlanet}
             disabled={!canInvadePlanet || busyAction !== null}
             className="w-full min-h-[44px] py-2.5 bg-red-950/30 border border-red-500 text-red-400 rounded hover:bg-red-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40 scifi-danger-action"
           >
             <Crosshair className="h-4 w-4" />
-            <span>{!isMyTurn ? 'Invade Planet' : busyAction === 'invade' ? 'Invading...' : 'Invade Planet'}</span>
+            <span>{!isMyTurn ? 'Invade Planet' : busyAction === 'auto-invade' ? 'Auto Invading...' : 'Auto Invade Until Captured'}</span>
           </button>
         </div>
       )}
@@ -461,6 +498,25 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             <div className="text-[10px] text-slate-500 italic text-center py-2">No opposing ships in orbit to target.</div>
           ) : (
             <div className="space-y-3">
+              <button
+                onClick={handleAutoSpaceCombat}
+                disabled={!spaceCombatAvailable || busyAction !== null}
+                className="w-full py-2.5 bg-red-950/40 border border-red-500 text-red-300 rounded hover:bg-red-900/30 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
+              >
+                <Crosshair className="h-4 w-4" />
+                <span>{busyAction === 'auto-space' ? 'Auto Resolving...' : 'Auto Attack Until Orbit Clear'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCombatShipsOpen(open => !open)}
+                className="flex w-full items-center justify-between rounded border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] font-bold uppercase text-slate-300 hover:border-slate-600"
+              >
+                <span>Manual combat ship lists</span>
+                <span className={`transition-transform ${combatShipsOpen ? 'rotate-180' : ''}`}>⌄</span>
+              </button>
+
+              {combatShipsOpen && (
               <div className="space-y-2">
                 <div>
                   <span className="block text-[9px] text-slate-400 uppercase font-bold mb-1">Select Attacking Ship</span>
@@ -503,6 +559,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
                   </div>
                 </div>
               </div>
+              )}
 
               <button
                 onClick={handleSpaceCombat}
@@ -540,6 +597,14 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
 
           {!enemyShipsInOrbit && hasGroundCombatTargets && (
             <div className="space-y-3">
+              <button
+                onClick={handleAutoGroundCombat}
+                disabled={!groundCombatAvailable || busyAction !== null}
+                className="w-full py-2.5 bg-amber-950/40 border border-amber-500 text-amber-300 rounded hover:bg-amber-900/30 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
+              >
+                <Crosshair className="h-4 w-4" />
+                <span>{busyAction === 'auto-ground' ? 'Auto Resolving...' : 'Auto Resolve Ground Battle'}</span>
+              </button>
               <div className="space-y-2">
                 <div>
                   <span className="block text-[9px] text-slate-400 uppercase font-bold mb-1">Select Invasion Division</span>

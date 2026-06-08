@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
-import { getMapLayoutRadius } from '../services/gameLogic';
+import { getMapLayoutRadius, isHostileOwner } from '../services/gameLogic';
 
 interface MapProps {
   gameState: GameState;
@@ -107,6 +107,7 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
 
     let raf = 0;
     let resizeObserver: ResizeObserver | null = null;
+    const animationStartedAt = performance.now();
 
     const drawWrappedDots = (
       dots: { x: number; y: number; r: number; o: number }[],
@@ -215,6 +216,9 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       const worldCenterY = (height * 0.5 - panY) / scale;
       const px = worldCenterX * 0.18;
       const py = worldCenterY * 0.18;
+      const elapsed = (performance.now() - animationStartedAt) / 1000;
+      const backgroundDrift = elapsed * 7;
+      const parallaxDrift = elapsed * 2.2;
 
       const nebulaCenters = [
         { x: width * 0.16 + px * 0.35, y: height * 0.34 + py * 0.22, r: Math.max(width, height) * 0.54, c: 'rgba(64, 92, 212, 0.18)' },
@@ -232,8 +236,9 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       });
 
       drawHexGrid(width, height, worldCenterX, worldCenterY);
-      drawWrappedDots(starsRef.current, width, height, 0, 0, 1);
-      drawWrappedDots(parallaxStarsRef.current, width, height, px * 0.28, py * 0.28, 0.95);
+      drawWrappedDots(starsRef.current, width, height, backgroundDrift, 0, 1);
+      drawWrappedDots(parallaxStarsRef.current, width, height, px * 0.28 + parallaxDrift, py * 0.28, 0.95);
+      raf = requestAnimationFrame(draw);
     };
 
     const scheduleDraw = () => {
@@ -956,6 +961,10 @@ export const Map: React.FC<MapProps> = ({
           {gameState.activeCombatNodeId && (() => {
             const combatNode = gameState.nodes.find(n => n.id === gameState.activeCombatNodeId);
             if (!combatNode || !isNodeVisible(combatNode)) return null;
+            const hostileShipsRemain = combatNode.ships.some(ship => isHostileOwner(gameState, myPlayerId, ship.owner));
+            const hostileGroundRemain = combatNode.groundUnits.some(unit => isHostileOwner(gameState, myPlayerId, unit.owner));
+            const friendlyGroundRemain = combatNode.groundUnits.some(unit => unit.owner === myPlayerId);
+            if (!hostileShipsRemain && !(hostileGroundRemain && friendlyGroundRemain)) return null;
             return (
               <g key={`combat-fx-${gameState.activeCombatNodeId}-${gameState.activeCombatUpdatedAt}`} transform={`translate(${combatNode.x}, ${combatNode.y})`} pointerEvents="none">
                 <circle r="25" fill="rgba(239,68,68,0.14)" stroke="#ef4444" strokeWidth="2" opacity="0.9">

@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { GameState, StarNode, Ship, GroundUnit } from '../types';
 import { audio } from '../services/audio';
-import { Navigation, PackageOpen, Plus, Minus, Shield, Recycle } from 'lucide-react';
+import { Navigation, PackageOpen, Plus, Minus, Shield, Recycle, ChevronDown } from 'lucide-react';
 import { HealthBar } from './HealthBar';
-import { SHIP_STATS, loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits, createPendingAction, getBuildDurationSeconds, formatSeconds, cancelRealtimeAction } from '../services/gameLogic';
+import { SHIP_STATS, loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits, createPendingAction, getBuildDurationSeconds, formatSeconds, cancelRealtimeAction, fullyLoadCarrierFromPlanet } from '../services/gameLogic';
+
+type FleetMoveSelection = { nodeId: string; shipIds: string[]; label: string };
 
 interface FleetPanelProps {
   node: StarNode;
@@ -11,6 +13,8 @@ interface FleetPanelProps {
   myPlayerId: string;
   selectedShip: Ship | null;
   onSelectShip: (ship: Ship | null) => void;
+  onSelectFleetMove?: (selection: FleetMoveSelection | null) => void;
+  selectedFleetMove?: FleetMoveSelection | null;
   onUpdateState: (newState: GameState) => void;
 }
 
@@ -22,12 +26,15 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   myPlayerId,
   selectedShip,
   onSelectShip,
+  onSelectFleetMove,
+  selectedFleetMove,
   onUpdateState
 }) => {
   const me = gameState.players.find(p => p.id === myPlayerId);
   const isFriendlyNode = node.claimedBy === myPlayerId;
   const [busyTroops, setBusyTroops] = useState<Set<string>>(new Set());
   const [expandedCarrierId, setExpandedCarrierId] = useState<string | null>(null);
+  const [fleetMoveOpen, setFleetMoveOpen] = useState(true);
   const [now, setNow] = useState(Date.now());
   const latestGameStateRef = useRef(gameState);
 
@@ -36,7 +43,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   }, [gameState]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    const interval = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -72,7 +79,26 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   const handleSelectShipForMove = (ship: Ship) => {
     if (ship.owner !== myPlayerId || !ship.canMove) return;
     audio.playBeep(600, 0.05);
+    onSelectFleetMove?.(null);
     onSelectShip(selectedShip?.id === ship.id ? null : ship);
+  };
+
+  const myMovableShips = node.ships.filter(s => s.owner === myPlayerId && s.canMove && s.movesLeft > 0);
+  const movableShipTypes = (['BattleShip', 'Destroyer', 'Carrier', 'ColonyShip'] as Ship['type'][])
+    .map(type => ({ type, ships: myMovableShips.filter(ship => ship.type === type) }))
+    .filter(group => group.ships.length > 0);
+
+  const handleSelectFleetMove = (ships: Ship[], label: string) => {
+    if (ships.length === 0) return;
+    audio.playBeep(680, 0.06);
+    onSelectShip(ships[0]);
+    onSelectFleetMove?.({ nodeId: node.id, shipIds: ships.map(ship => ship.id), label });
+  };
+
+  const handleFullyLoadCarrier = (carrier: Ship) => {
+    if (!canManageTroops || carrier.owner !== myPlayerId || carrier.type !== 'Carrier') return;
+    audio.playBeep(760, 0.06);
+    onUpdateState(fullyLoadCarrierFromPlanet(latestGameStateRef.current, node.id, carrier.id, myPlayerId));
   };
 
   const finishCarrierTransfer = (key: string, updater: (state: GameState) => GameState) => {
@@ -220,6 +246,45 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
         </div>
       )}
 
+      {myMovableShips.length > 0 && (
+        <div className="rounded border border-blue-900/60 bg-blue-950/15 p-3 space-y-2 font-mono">
+          <button
+            type="button"
+            onClick={() => setFleetMoveOpen(open => !open)}
+            className="flex w-full items-center justify-between text-[10px] font-bold uppercase tracking-wider text-blue-300"
+          >
+            <span>Fleet movement controls</span>
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${fleetMoveOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {fleetMoveOpen && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => handleSelectFleetMove(myMovableShips, 'All movable ships')}
+                className={`w-full rounded border px-2.5 py-2 text-[10px] font-bold uppercase ${selectedFleetMove?.nodeId === node.id && selectedFleetMove.label === 'All movable ships' ? 'border-yellow-500 bg-yellow-950/20 text-yellow-300' : 'border-blue-800/50 bg-slate-950/40 text-blue-200 hover:border-blue-400'}`}
+              >
+                Move all ships ({myMovableShips.length})
+              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                {movableShipTypes.map(group => (
+                  <button
+                    key={group.type}
+                    type="button"
+                    onClick={() => handleSelectFleetMove(group.ships, `All ${group.type}`)}
+                    className={`rounded border px-2 py-1.5 text-[9px] font-bold uppercase ${selectedFleetMove?.nodeId === node.id && selectedFleetMove.label === `All ${group.type}` ? 'border-yellow-500 bg-yellow-950/20 text-yellow-300' : 'border-slate-700 bg-slate-950/50 text-slate-300 hover:border-slate-500'}`}
+                  >
+                    Move all {group.type}s ({group.ships.length})
+                  </button>
+                ))}
+              </div>
+              <div className="text-[9px] text-slate-500">
+                Pick one option, then click a destination planet on the map. All selected ships travel together.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div>
         <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
           Orbiting Space Fleets ({node.ships.length})
@@ -330,6 +395,15 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                         <span>CARRIER TROOP BAY</span>
                         <span>Carrying: {ship.carriedUnits.length}/3</span>
                       </div>
+                      {canManageTroops && ship.owner === myPlayerId && friendlyGroundUnits.length > 0 && ship.carriedUnits.length < 3 && (
+                        <button
+                          type="button"
+                          onClick={() => handleFullyLoadCarrier(ship)}
+                          className="w-full min-h-[36px] rounded border border-emerald-600/50 bg-emerald-950/25 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300 hover:border-emerald-400"
+                        >
+                          Fully load carrier now ({Math.min(3 - ship.carriedUnits.length, friendlyGroundUnits.length)} troop{Math.min(3 - ship.carriedUnits.length, friendlyGroundUnits.length) === 1 ? '' : 's'})
+                        </button>
+                      )}
 
                       {ship.carriedUnits.length === 0 ? (
                         <div className="text-[9px] text-slate-600 italic">No ground units loaded.</div>

@@ -6,12 +6,16 @@ import { CombatPanel } from './CombatPanel';
 import { audio } from '../services/audio';
 import { Hammer, Swords, Anchor, Shield, Orbit, X } from 'lucide-react';
 
+type FleetMoveSelection = { nodeId: string; shipIds: string[]; label: string };
+
 interface NodeDetailsProps {
   node: StarNode;
   gameState: GameState;
   myPlayerId: string;
   selectedShip: Ship | null;
   onSelectShip: (ship: Ship | null) => void;
+  onSelectFleetMove?: (selection: FleetMoveSelection | null) => void;
+  selectedFleetMove?: FleetMoveSelection | null;
   onUpdateState: (newState: GameState) => void;
   onClose: () => void;
   forceCombatTab?: boolean;
@@ -23,6 +27,8 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
   myPlayerId,
   selectedShip,
   onSelectShip,
+  onSelectFleetMove,
+  selectedFleetMove,
   onUpdateState,
   onClose,
   forceCombatTab = false
@@ -183,6 +189,8 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
                 myPlayerId={myPlayerId}
                 selectedShip={selectedShip}
                 onSelectShip={onSelectShip}
+                onSelectFleetMove={onSelectFleetMove}
+                selectedFleetMove={selectedFleetMove}
                 onUpdateState={onUpdateState}
               />
             )}

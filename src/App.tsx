@@ -9,7 +9,7 @@ import { DiplomacyPanel } from './components/DiplomacyPanel';
 import type { GameState, StarNode, Ship } from './types';
 import { subscribeToRoom, updateRoomState, getDbMode, getGameRoomState } from './services/database';
 import type { DbMode } from './services/database';
-import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration, processRealtimeActions, processRealtimeIncome, getMoveDurationSeconds, createPendingAction, formatSeconds } from './services/gameLogic';
+import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration, processRealtimeActions, processRealtimeIncome, getMoveDurationSeconds, createPendingAction, formatSeconds, getPlayerEconomySummary } from './services/gameLogic';
 import { audio } from './services/audio';
 import { createTutorialScenario, TUTORIAL_PLAYER_ID } from './services/tutorialScenarios';
 import type { TutorialScenarioId } from './services/tutorialScenarios';
@@ -71,6 +71,11 @@ const GarrisonsHudIcon = () => (
   </HudIconFrame>
 );
 
+type FleetMoveSelection = {
+  nodeId: string;
+  shipIds: string[];
+  label: string;
+};
 
 export const App: React.FC = () => {
   const [view, setView] = useState<'lobby' | 'game' | 'tutorialGame'>('lobby');
@@ -82,6 +87,7 @@ export const App: React.FC = () => {
   // Game UI State
   const [selectedNode, setSelectedNode] = useState<StarNode | null>(null);
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
+  const [selectedFleetMove, setSelectedFleetMove] = useState<FleetMoveSelection | null>(null);
   const [reachableNodes, setReachableNodes] = useState<{ [nodeId: string]: number }>({});
 
   // Settings Overlay
@@ -152,6 +158,7 @@ export const App: React.FC = () => {
     setMyPlayerId(playerId);
     setSelectedNode(null);
     setSelectedShip(null);
+    setSelectedFleetMove(null);
     setReachableNodes({});
     localStorage.setItem('void_empires_active_game', cleanCode);
     localStorage.setItem('void_empires_player_id', playerId);
@@ -187,26 +194,33 @@ export const App: React.FC = () => {
     setShowTurnOverlay(false);
   }, [gameState?.roomId, gameState?.status, view]);
 
-  // Update reachable nodes when ship is selected
+  // Update reachable nodes when a single ship or bulk fleet move is selected.
   useEffect(() => {
-    if (!selectedShip || !gameState || !selectedNode) {
+    if (!gameState || !selectedNode) {
+      setReachableNodes({});
+      return;
+    }
+
+    if (selectedFleetMove) {
+      const source = gameState.nodes.find(n => n.id === selectedFleetMove.nodeId);
+      const leadShip = source?.ships.find(s => selectedFleetMove.shipIds.includes(s.id) && s.owner === myPlayerId && s.canMove);
+      if (!source || !leadShip) {
+        setReachableNodes({});
+        return;
+      }
+      setReachableNodes(getReachableNodes(source.id, leadShip, gameState.nodes, myPlayerId, gameState));
+      return;
+    }
+
+    if (!selectedShip) {
       setReachableNodes({});
       return;
     }
     const range = getReachableNodes(selectedNode.id, selectedShip, gameState.nodes, myPlayerId, gameState);
     setReachableNodes(range);
-  }, [selectedShip, selectedNode, gameState, myPlayerId]);
+  }, [selectedShip, selectedFleetMove, selectedNode, gameState, myPlayerId]);
 
-  // In real-time mode, open the latest combat system for all players when combat happens.
-  useEffect(() => {
-    if (!gameState || gameState.status !== 'playing' || !gameState.activeCombatNodeId) return;
-    const combatNode = gameState.nodes.find(n => n.id === gameState.activeCombatNodeId);
-    if (combatNode) {
-      setSelectedNode(combatNode);
-      setSelectedShip(null);
-    }
-  }, [gameState?.activeCombatNodeId, gameState?.activeCombatUpdatedAt, gameState?.status]);
-
+  // Combat is no longer forced open for spectators. Players see combat only when they click the planet.
 
   // Real-time action processor: orders complete and all empires receive timed income automatically.
   useEffect(() => {
@@ -230,7 +244,7 @@ export const App: React.FC = () => {
       }
     };
 
-    const interval = window.setInterval(tick, 1000);
+    const interval = window.setInterval(tick, 250);
     void tick();
     return () => window.clearInterval(interval);
   }, [gameState, currentCode, isTutorialMode]);
@@ -251,11 +265,29 @@ export const App: React.FC = () => {
     }, 1800);
   }, [gameState?.players, myPlayerId]);
 
-  // Handle ship movement — NO auto-colonize; colony ships must use action in phase 2
+  const handleSelectFleetMove = (selection: FleetMoveSelection | null) => {
+    setSelectedFleetMove(selection);
+    if (!selection || !gameState) {
+      setSelectedShip(null);
+      return;
+    }
+    const source = gameState.nodes.find(n => n.id === selection.nodeId);
+    const leadShip = source?.ships.find(s => selection.shipIds.includes(s.id) && s.owner === myPlayerId && s.canMove);
+    setSelectedShip(leadShip || null);
+    if (source) setSelectedNode(source);
+  };
+
+  // Handle ship movement — supports one selected ship or a bulk fleet/type selection.
   const handleMoveShip = async (targetNodeId: string) => {
-    if (!gameState || !selectedShip) return;
-    
-    const startNode = gameState.nodes.find(n => n.ships.some(s => s.id === selectedShip.id));
+    if (!gameState) return;
+
+    const fleetSelection = selectedFleetMove;
+    const movingShipIds = fleetSelection?.shipIds || (selectedShip ? [selectedShip.id] : []);
+    if (movingShipIds.length === 0) return;
+
+    const startNode = fleetSelection
+      ? gameState.nodes.find(n => n.id === fleetSelection.nodeId)
+      : gameState.nodes.find(n => selectedShip && n.ships.some(s => s.id === selectedShip.id));
     const targetNode = gameState.nodes.find(n => n.id === targetNodeId);
     if (!startNode || !targetNode) return;
 
@@ -264,50 +296,67 @@ export const App: React.FC = () => {
       return;
     }
 
+    const shipsToMove = startNode.ships.filter(s =>
+      movingShipIds.includes(s.id) &&
+      s.owner === myPlayerId &&
+      s.canMove &&
+      s.movesLeft > 0
+    );
+    if (shipsToMove.length === 0) return;
+
     audio.playMove();
     const costInMoves = reachableNodes[targetNodeId];
     const durationSeconds = getMoveDurationSeconds(startNode, targetNode, costInMoves);
-    const travelingShip: Ship = {
-      ...selectedShip,
-      movesLeft: selectedShip.movesLeft,
-      turnsInTerritory: 0,
-      lastNodeId: startNode.id,
-      inTransit: true,
-      transitToNodeId: targetNodeId
-    };
+    const pendingActions = shipsToMove.map(ship => {
+      const travelingShip: Ship = {
+        ...ship,
+        movesLeft: ship.movesLeft,
+        turnsInTerritory: 0,
+        lastNodeId: startNode.id,
+        inTransit: true,
+        transitToNodeId: targetNodeId
+      };
 
-    const pendingAction = createPendingAction({
-      type: 'move_ship',
-      playerId: myPlayerId,
-      nodeId: startNode.id,
-      targetNodeId,
-      shipId: selectedShip.id,
-      ship: travelingShip,
-      durationSeconds,
-      label: `${selectedShip.type} ${startNode.name} → ${targetNode.name}`
+      return createPendingAction({
+        type: 'move_ship',
+        playerId: myPlayerId,
+        nodeId: startNode.id,
+        targetNodeId,
+        shipId: ship.id,
+        ship: travelingShip,
+        durationSeconds,
+        label: `${ship.type} ${startNode.name} → ${targetNode.name}`
+      });
     });
 
+    const movingIds = new Set(shipsToMove.map(s => s.id));
     const updatedNodes = gameState.nodes.map(n => {
       if (n.id === startNode.id) {
-        return { ...n, ships: n.ships.filter(s => s.id !== selectedShip.id) };
+        return { ...n, ships: n.ships.filter(s => !movingIds.has(s.id)) };
       }
       return n;
     });
 
+    const moveLabel = shipsToMove.length === 1
+      ? `${shipsToMove[0].type}`
+      : `${shipsToMove.length} ships${fleetSelection ? ` (${fleetSelection.label})` : ''}`;
+
     const updatedState: GameState = {
       ...gameState,
       nodes: updatedNodes,
-      pendingActions: [...(gameState.pendingActions || []), pendingAction],
+      pendingActions: [...(gameState.pendingActions || []), ...pendingActions],
       actionLog: [
         ...gameState.actionLog,
-        `${gameState.players.find(p => p.id === myPlayerId)?.name}: ${selectedShip.type} departed ${startNode.name} for ${targetNode.name}; ETA ${formatSeconds(durationSeconds)}.`
+        `${gameState.players.find(p => p.id === myPlayerId)?.name}: ${moveLabel} departed ${startNode.name} for ${targetNode.name}; ETA ${formatSeconds(durationSeconds)}.`
       ],
-      lastAction: 'queue_ship_move',
+      lastAction: shipsToMove.length > 1 ? 'queue_fleet_move' : 'queue_ship_move',
       lastActionAt: new Date().toISOString(),
       lastUpdated: new Date().toISOString()
     };
 
     setSelectedShip(null);
+    setSelectedFleetMove(null);
+    setReachableNodes({});
     setGameState(updatedState);
     refreshSelectionsFromState(updatedState);
     if (!isTutorialMode) {
@@ -498,7 +547,8 @@ export const App: React.FC = () => {
       {/* ═══ 1. STELLARIS-STYLE TOP HUD BAR ═══ */}
       {(() => {
         const myOwnedNodes = gameState.nodes.filter(n => n.claimedBy === myPlayerId);
-        const myYield = myOwnedNodes.reduce((acc, curr) => acc + curr.resourceGeneration, 0);
+        const economy = getPlayerEconomySummary(gameState, myPlayerId);
+        const myYield = economy.netPerIncomeTick;
         
         const myShipsCount = gameState.nodes.reduce((count, n) => {
           const topLevelShips = n.ships.filter(s => s.owner === myPlayerId);
@@ -537,13 +587,13 @@ export const App: React.FC = () => {
             {/* CENTER: Stellaris resource bar */}
             <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-slate-700/50">
               {/* Credits (Energy Credits) */}
-              <div className="relative flex items-center gap-2 shrink-0">
+              <div className="relative flex items-center gap-2 shrink-0" title={`Gross/tick: +${economy.revenuePerIncomeTick}R | Upkeep/tick: -${economy.upkeepPerIncomeTick}R (Ships -${economy.shipUpkeep}, Armies -${economy.armyUpkeep}) | Net/tick: +${economy.netPerIncomeTick}R`}>
                 <CreditsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Credits</span>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-sm font-bold text-amber-400 font-mono leading-none">{me?.resources}R</span>
-                    <span className="text-[10px] text-emerald-400 font-bold font-mono leading-none">+{myYield}</span>
+                    <span className="text-sm font-bold text-amber-400 font-mono leading-none">{Number(me?.resources ?? 0).toFixed(1)}R</span>
+                    <span className="text-[10px] text-emerald-400 font-bold font-mono leading-none">+{myYield}/tick</span>
                   </div>
                 </div>
                 <div className="pointer-events-none absolute -right-2 -top-4 flex flex-col items-end gap-0.5">
@@ -750,10 +800,11 @@ export const App: React.FC = () => {
           gameState={gameState}
           myPlayerId={myPlayerId}
           selectedShip={selectedShip}
-          onSelectShip={setSelectedShip}
+          onSelectShip={(ship) => { setSelectedFleetMove(null); setSelectedShip(ship); }}
+          onSelectFleetMove={handleSelectFleetMove}
+          selectedFleetMove={selectedFleetMove}
           onUpdateState={handleUpdateGameState}
-          onClose={() => { setSelectedNode(null); setSelectedShip(null); }}
-          forceCombatTab={gameState.activeCombatNodeId === selectedNode.id}
+          onClose={() => { setSelectedNode(null); setSelectedShip(null); setSelectedFleetMove(null); }}
         />
       )}
 
