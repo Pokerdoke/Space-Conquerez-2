@@ -49,16 +49,28 @@ html, body, #root {
 .player-color-blue { color: #3b82f6; }
 .player-color-purple { color: #8b5cf6; }
 .player-color-yellow { color: #f59e0b; }
+.player-color-red { color: #ef4444; }
+.player-color-cyan { color: #06b6d4; }
+.player-color-orange { color: #f97316; }
+.player-color-pink { color: #ec4899; }
 
 .player-bg-green { background-color: rgba(16,185,129,0.15); }
 .player-bg-blue { background-color: rgba(59,130,246,0.15); }
 .player-bg-purple { background-color: rgba(139,92,246,0.15); }
 .player-bg-yellow { background-color: rgba(245,158,11,0.15); }
+.player-bg-red { background-color: rgba(239,68,68,0.15); }
+.player-bg-cyan { background-color: rgba(6,182,212,0.15); }
+.player-bg-orange { background-color: rgba(249,115,22,0.15); }
+.player-bg-pink { background-color: rgba(236,72,153,0.15); }
 
 .player-border-green { border-color: #10b981; }
 .player-border-blue { border-color: #3b82f6; }
 .player-border-purple { border-color: #8b5cf6; }
 .player-border-yellow { border-color: #f59e0b; }
+.player-border-red { border-color: #ef4444; }
+.player-border-cyan { border-color: #06b6d4; }
+.player-border-orange { border-color: #f97316; }
+.player-border-pink { border-color: #ec4899; }
 
 /* Sci-fi buttons with clipped corner styling */
 .scifi-btn {
@@ -191,5 +203,27 @@ button[class*="emerald"]:not(:disabled):active {
 
   .scifi-btn {
     min-height: 44px;
+  }
+}
+
+
+/* Allow and improve mobile landscape play. The PWA manifest is no longer locked to portrait. */
+@media (orientation: landscape) and (max-height: 520px) {
+  html, body, #root {
+    width: 100dvw;
+    height: 100dvh;
+  }
+
+  header {
+    min-height: 46px !important;
+    overflow-x: auto;
+  }
+
+  header > div {
+    min-height: 46px;
+  }
+
+  .glass-panel {
+    max-height: calc(100dvh - 16px);
   }
 }

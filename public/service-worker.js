@@ -1,4 +1,4 @@
-const CACHE_NAME = 'void-empires-shell-v1';
+const CACHE_NAME = 'void-empires-shell-v3-tutorial-redo';
 const APP_SHELL = ['/', '/index.html', '/manifest.json', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -17,6 +17,22 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.hostname.includes('supabase.co')) return; // game state stays online in Supabase
   if (event.request.method !== 'GET') return;
+
+  // HTML must be network-first, otherwise players can stay stuck on an old deployment.
+  const acceptsHtml = event.request.headers.get('accept')?.includes('text/html');
+  if (acceptsHtml || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then((cached) => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
       if (response && response.status === 200 && response.type === 'basic') {

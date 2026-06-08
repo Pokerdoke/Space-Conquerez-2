@@ -20,6 +20,10 @@ const PLAYER_COLORS: Record<string, string> = {
   blue: '#3b82f6',
   purple: '#8b5cf6',
   yellow: '#f59e0b',
+  red: '#ef4444',
+  cyan: '#06b6d4',
+  orange: '#f97316',
+  pink: '#ec4899',
 };
 
 const BIOMES: PlanetBiome[] = [
@@ -81,6 +85,9 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const starsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
   const parallaxStarsRef = useRef<{ x: number; y: number; r: number; o: number }[]>([]);
+  const animationStartedAtRef = useRef(performance.now());
+  const viewportRef = useRef({ panX, panY, scale });
+  viewportRef.current = { panX, panY, scale };
 
   if (starsRef.current.length === 0) {
     starsRef.current = Array.from({ length: 280 }, () => ({
@@ -107,7 +114,6 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
 
     let raf = 0;
     let resizeObserver: ResizeObserver | null = null;
-    const animationStartedAt = performance.now();
 
     const drawWrappedDots = (
       dots: { x: number; y: number; r: number; o: number }[],
@@ -212,11 +218,13 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       ctx.fillRect(0, 0, width, height);
 
       // Derive world offset from the viewport center so zooming does not visibly shift the backdrop.
-      const worldCenterX = (width * 0.5 - panX) / scale;
-      const worldCenterY = (height * 0.5 - panY) / scale;
+      // Store the viewport in a ref so moving the map does not restart the star drift animation.
+      const { panX: livePanX, panY: livePanY, scale: liveScale } = viewportRef.current;
+      const worldCenterX = (width * 0.5 - livePanX) / liveScale;
+      const worldCenterY = (height * 0.5 - livePanY) / liveScale;
       const px = worldCenterX * 0.18;
       const py = worldCenterY * 0.18;
-      const elapsed = (performance.now() - animationStartedAt) / 1000;
+      const elapsed = (performance.now() - animationStartedAtRef.current) / 1000;
       const backgroundDrift = elapsed * 7;
       const parallaxDrift = elapsed * 2.2;
 
@@ -256,7 +264,7 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
       resizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleDraw);
     };
-  }, [panX, panY, scale]);
+  }, []);
 
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" />;
 };
@@ -694,7 +702,7 @@ export const Map: React.FC<MapProps> = ({
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    const interval = window.setInterval(() => setNow(Date.now()), 40);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -1046,6 +1054,10 @@ export const Map: React.FC<MapProps> = ({
                     blue: '#60a5fa',
                     purple: '#a78bfa',
                     yellow: '#fbbf24',
+                    red: '#f87171',
+                    cyan: '#22d3ee',
+                    orange: '#fb923c',
+                    pink: '#f472b6',
                   };
                   const limitedGroups = groups.slice(0, 4);
                   const soldierY = planetR * 0.74;

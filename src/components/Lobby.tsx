@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import type { GameState } from '../types';
+import type { GameState, Player } from '../types';
 import {
   createGameRoom,
   joinGameRoom,
@@ -10,6 +10,7 @@ import {
   leaveGameRoom,
   listPublicGameRooms,
   subscribeToPublicGameRooms,
+  normalizeCommanderName,
   type PublicGameSummary
 } from '../services/database';
 import { generateMap } from '../services/gameLogic';
@@ -26,7 +27,8 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Lock,
-  Unlock
+  Unlock,
+  Palette
 } from 'lucide-react';
 import { Tutorial } from './Tutorial';
 import type { TutorialScenarioId } from '../services/tutorialScenarios';
@@ -48,6 +50,21 @@ const GALAXY_TYPES: { type: NonNullable<GameState['galaxyType']>; label: string;
   { type: 'ring', label: 'Ring', desc: 'outer ring + hub' },
   { type: 'circular', label: 'Circular', desc: 'classic round map' }
 ];
+
+type PlayerColor = Player['color'];
+
+const PLAYER_COLOR_CHOICES: { id: PlayerColor; label: string; hex: string; swatchClass: string; activeClass: string }[] = [
+  { id: 'green', label: 'Emerald', hex: '#10b981', swatchClass: 'bg-emerald-400', activeClass: 'border-emerald-400 bg-emerald-950/30 text-emerald-200 shadow-[0_0_14px_rgba(16,185,129,0.25)]' },
+  { id: 'blue', label: 'Blue', hex: '#3b82f6', swatchClass: 'bg-blue-400', activeClass: 'border-blue-400 bg-blue-950/30 text-blue-200 shadow-[0_0_14px_rgba(59,130,246,0.25)]' },
+  { id: 'purple', label: 'Violet', hex: '#8b5cf6', swatchClass: 'bg-violet-400', activeClass: 'border-violet-400 bg-violet-950/30 text-violet-200 shadow-[0_0_14px_rgba(139,92,246,0.25)]' },
+  { id: 'yellow', label: 'Gold', hex: '#f59e0b', swatchClass: 'bg-amber-400', activeClass: 'border-amber-400 bg-amber-950/30 text-amber-200 shadow-[0_0_14px_rgba(245,158,11,0.25)]' },
+  { id: 'red', label: 'Crimson', hex: '#ef4444', swatchClass: 'bg-red-400', activeClass: 'border-red-400 bg-red-950/30 text-red-200 shadow-[0_0_14px_rgba(239,68,68,0.25)]' },
+  { id: 'cyan', label: 'Cyan', hex: '#06b6d4', swatchClass: 'bg-cyan-400', activeClass: 'border-cyan-400 bg-cyan-950/30 text-cyan-200 shadow-[0_0_14px_rgba(6,182,212,0.25)]' },
+  { id: 'orange', label: 'Orange', hex: '#f97316', swatchClass: 'bg-orange-400', activeClass: 'border-orange-400 bg-orange-950/30 text-orange-200 shadow-[0_0_14px_rgba(249,115,22,0.25)]' },
+  { id: 'pink', label: 'Pink', hex: '#ec4899', swatchClass: 'bg-pink-400', activeClass: 'border-pink-400 bg-pink-950/30 text-pink-200 shadow-[0_0_14px_rgba(236,72,153,0.25)]' }
+];
+
+const getColorLabel = (color: PlayerColor) => PLAYER_COLOR_CHOICES.find(choice => choice.id === color)?.label || color;
 
 const GalaxyShapeIcon: React.FC<{ type?: GameState['galaxyType']; className?: string }> = ({ type = 'spiral4', className = 'h-10 w-full' }) => {
   const safeType = type || 'spiral4';
@@ -107,7 +124,7 @@ const GalaxyShapeIcon: React.FC<{ type?: GameState['galaxyType']; className?: st
 };
 export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode, onStartTutorialScenario }) => {
   const [view, setView] = useState<LobbyView>('welcome');
-  const [playerName, setPlayerName] = useState(() => getSavedPlayerName());
+  const [playerName, setPlayerName] = useState(() => normalizeCommanderName(getSavedPlayerName()));
   const [roomCode, setRoomCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
   const [mapSize, setMapSize] = useState<GameState['mapSize']>('small');
@@ -131,8 +148,10 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
   const [resumePrompt, setResumePrompt] = useState<{ code: string; state: GameState; playerId: string } | null>(null);
 
   const savePlayerName = (name: string) => {
-    setPlayerName(name);
-    localStorage.setItem('void_empires_player_name', name);
+    const formattedName = normalizeCommanderName(name);
+    setPlayerName(formattedName);
+    localStorage.setItem('void_empires_player_name', formattedName);
+    return formattedName;
   };
 
   const findMyPlayerId = (state: GameState) => {
@@ -184,7 +203,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
 
   const handleCreateLobby = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim()) {
+    const commanderName = normalizeCommanderName(playerName);
+    if (!commanderName) {
       setErrorMsg('Please enter your name');
       return;
     }
@@ -193,8 +213,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     audio.playBuild();
     
     try {
-      savePlayerName(playerName);
-      const { code, state } = await createGameRoom(playerName.trim(), maxPlayers, mapSize, npcCount, isPublic, galaxyType);
+      savePlayerName(commanderName);
+      const { code, state } = await createGameRoom(commanderName, maxPlayers, mapSize, npcCount, isPublic, galaxyType);
       
       setCurrentCode(code);
       setGameState(state);
@@ -219,7 +239,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
 
   const handleJoinLobby = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim()) {
+    const commanderName = normalizeCommanderName(playerName);
+    if (!commanderName) {
       setErrorMsg('Please enter your name');
       return;
     }
@@ -232,9 +253,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     audio.playBuild();
 
     try {
-      savePlayerName(playerName);
+      savePlayerName(commanderName);
       const code = roomCode.trim().toUpperCase();
-      const state = await joinGameRoom(code, playerName.trim());
+      const state = await joinGameRoom(code, commanderName);
       handleJoinState(code, state);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to join room.');
@@ -244,7 +265,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
   };
 
   const handleJoinPublicGame = async (code: string) => {
-    if (!playerName.trim()) {
+    const commanderName = normalizeCommanderName(playerName);
+    if (!commanderName) {
       setErrorMsg('Please enter your name before joining a public game.');
       return;
     }
@@ -252,8 +274,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     setLoading(true);
     audio.playBuild();
     try {
-      savePlayerName(playerName);
-      const state = await joinGameRoom(code, playerName.trim());
+      savePlayerName(commanderName);
+      const state = await joinGameRoom(code, commanderName);
       handleJoinState(code, state);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to join public game.');
@@ -316,7 +338,31 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     };
 
     setGameState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    setGameState(await updateRoomState(currentCode, updatedState));
+  };
+
+  const handleChangeColor = async (color: PlayerColor) => {
+    if (!gameState || !currentCode || gameState.status !== 'lobby') return;
+    const takenBy = gameState.players.find(player => player.color === color && player.id !== myPlayerId);
+    if (takenBy) {
+      setErrorMsg(`${takenBy.name} is already using ${getColorLabel(color)}.`);
+      return;
+    }
+
+    setErrorMsg('');
+    audio.playBeep(720, 0.05);
+    const playerNameForLog = gameState.players.find(p => p.id === myPlayerId)?.name || 'A commander';
+    const updatedState: GameState = {
+      ...gameState,
+      players: gameState.players.map(player => player.id === myPlayerId ? { ...player, color } : player),
+      actionLog: [...gameState.actionLog, `${playerNameForLog} changed empire color to ${getColorLabel(color)}.`],
+      lastAction: 'player_color_changed',
+      lastActionAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
+    };
+
+    setGameState(updatedState);
+    setGameState(await updateRoomState(currentCode, updatedState));
   };
 
   const handleHostSettingsChange = async (changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'galaxyType' | 'npcCount' | 'isPublic'>>) => {
@@ -361,7 +407,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     };
 
     setGameState(updatedState);
-    await updateRoomState(currentCode, updatedState);
+    setGameState(await updateRoomState(currentCode, updatedState));
   };
 
   const copyRoomCode = () => {
@@ -410,18 +456,24 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     setResumePrompt(null);
   };
 
-  const playerColorHex = {
+  const playerColorHex: Record<PlayerColor, string> = {
     green: 'text-emerald-400 border-emerald-500 bg-emerald-950/20',
     blue: 'text-blue-400 border-blue-500 bg-blue-950/20',
     purple: 'text-violet-400 border-violet-500 bg-violet-950/20',
-    yellow: 'text-amber-400 border-amber-500 bg-amber-950/20'
+    yellow: 'text-amber-400 border-amber-500 bg-amber-950/20',
+    red: 'text-red-400 border-red-500 bg-red-950/20',
+    cyan: 'text-cyan-400 border-cyan-500 bg-cyan-950/20',
+    orange: 'text-orange-400 border-orange-500 bg-orange-950/20',
+    pink: 'text-pink-400 border-pink-500 bg-pink-950/20'
   };
 
   const isHost = Boolean(gameState && myPlayerId === gameState.creatorId);
+  const myLobbyPlayer = gameState?.players.find(player => player.id === myPlayerId) || null;
+  const takenLobbyColors = new Map((gameState?.players || []).map(player => [player.color, player]));
   const containerWidth = view === 'tutorial' ? 'max-w-5xl' : view === 'public' || view === 'waiting' ? 'max-w-2xl' : 'max-w-md';
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-slate-100 select-none relative overflow-hidden bg-slate-950">
+    <div className="flex h-screen flex-col items-center justify-start overflow-y-auto overflow-x-hidden p-4 py-8 text-slate-100 select-none relative bg-slate-950">
       <div className="starfield" />
       
       <button 
@@ -447,7 +499,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         </div>
       )}
 
-      <div className={`w-full ${containerWidth} z-10`}>
+      <div className={`w-full ${containerWidth} z-10 min-h-0`}>
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-500 drop-shadow-[0_0_20px_rgba(99,102,241,0.6)] select-none uppercase">
             Space Conquererz 2
@@ -465,7 +517,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         )}
 
         {view === 'welcome' && (
-          <div className="glass-panel p-6 space-y-6 rounded-lg border border-slate-800/80">
+          <div className="glass-panel p-6 space-y-6 rounded-lg border border-slate-800/80 max-h-[82vh] overflow-y-auto">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Commander Name</label>
               <input
@@ -473,8 +525,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                 placeholder="Enter commander name..."
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
+                onBlur={() => setPlayerName(normalizeCommanderName(playerName))}
                 maxLength={18}
-                className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors uppercase font-mono tracking-wider"
+                className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors font-mono tracking-wider"
               />
             </div>
 
@@ -518,7 +571,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         )}
 
         {view === 'create' && (
-          <form onSubmit={handleCreateLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80">
+          <form onSubmit={handleCreateLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80 max-h-[82vh] overflow-y-auto">
             <h2 className="text-lg font-bold uppercase tracking-wider text-indigo-400 mb-2">Empire Setup</h2>
             
             <div>
@@ -528,6 +581,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                 placeholder="Enter commander name..."
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
+                onBlur={() => setPlayerName(normalizeCommanderName(playerName))}
+                maxLength={18}
                 className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
               />
             </div>
@@ -668,6 +723,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                 placeholder="Enter commander name..."
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
+                onBlur={() => setPlayerName(normalizeCommanderName(playerName))}
                 maxLength={18}
                 className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
               />
@@ -736,7 +792,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
         )}
 
         {view === 'join' && (
-          <form onSubmit={handleJoinLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80">
+          <form onSubmit={handleJoinLobby} className="glass-panel p-6 space-y-5 rounded-lg border border-slate-800/80 max-h-[82vh] overflow-y-auto">
             <h2 className="text-lg font-bold uppercase tracking-wider text-indigo-400 mb-2">Join Empire</h2>
             
             <div>
@@ -746,6 +802,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                 placeholder="Enter commander name..."
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
+                onBlur={() => setPlayerName(normalizeCommanderName(playerName))}
+                maxLength={18}
                 className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
               />
             </div>
@@ -906,6 +964,45 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
             {!isHost && gameState.status === 'lobby' && (
               <div className="p-3 rounded border border-slate-800 bg-slate-950/40 text-xs text-slate-400">
                 The host can change map size, player slots, NPC systems, and public/private status before launch. Your screen updates live.
+              </div>
+            )}
+
+            {gameState.status === 'lobby' && myLobbyPlayer && (
+              <div className="p-4 rounded-lg border border-slate-800 bg-slate-950/45 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-300">
+                    <Palette className="h-4 w-4" />
+                    <span>Your Empire Color</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">Current: <span className={playerColorHex[myLobbyPlayer.color].split(' ')[0]}>{getColorLabel(myLobbyPlayer.color)}</span></span>
+                </div>
+                <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                  {PLAYER_COLOR_CHOICES.map((choice) => {
+                    const takenBy = takenLobbyColors.get(choice.id);
+                    const isMine = myLobbyPlayer.color === choice.id;
+                    const disabled = Boolean(takenBy && takenBy.id !== myPlayerId);
+                    return (
+                      <button
+                        key={choice.id}
+                        type="button"
+                        disabled={disabled || settingsSaving}
+                        title={disabled ? `${choice.label} is taken by ${takenBy?.name}` : `Use ${choice.label}`}
+                        onClick={() => handleChangeColor(choice.id)}
+                        className={`min-h-[44px] rounded border px-2 py-2 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                          isMine
+                            ? choice.activeClass
+                            : disabled
+                              ? 'border-slate-900 bg-slate-950/35 text-slate-700 cursor-not-allowed opacity-50'
+                              : 'border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-500 hover:text-white'
+                        }`}
+                      >
+                        <span className={`mx-auto mb-1 block h-4 w-4 rounded-full border border-white/30 ${choice.swatchClass}`} style={{ boxShadow: isMine ? `0 0 10px ${choice.hex}` : undefined }} />
+                        {choice.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-slate-500 font-mono">Taken colors are locked so every player stays easy to identify on the map.</p>
               </div>
             )}
 

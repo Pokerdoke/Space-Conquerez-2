@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { resolveSpaceCombat, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, isHostileOwner, REALTIME_ACTION_SECONDS, autoResolveSpaceBattle, autoResolvePlanetInvasion } from '../services/gameLogic';
+import { resolveSpaceCombat, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, getBombardmentCooldownRemaining, isHostileOwner, REALTIME_ACTION_SECONDS, startAutoSpaceBattle, startAutoGroundBattle, startAutoInvasion, startAutoOrbitalBombardment, hasQueuedAutoAction } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Swords, ShieldAlert, Crosshair, Eye } from 'lucide-react';
 import { HealthBar } from './HealthBar';
@@ -129,7 +129,11 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       green: 'text-emerald-400',
       blue: 'text-blue-400',
       purple: 'text-violet-400',
-      yellow: 'text-amber-400'
+      yellow: 'text-amber-400',
+      red: 'text-red-400',
+      cyan: 'text-cyan-400',
+      orange: 'text-orange-400',
+      pink: 'text-pink-400'
     };
     return mappings[color];
   };
@@ -155,11 +159,14 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   const hasGroundCombatTargets = isCombatPhase && !enemyShipsInOrbit && myGroundUnits.length > 0 && enemyGroundUnits.length > 0;
   const groundCombatAvailable = isMyTurn && hasGroundCombatTargets;
   const friendlyTroopsOnSurface = node.groundUnits.some(g => g.owner === perspectivePlayerId);
-  const bombardCapableBattleships = node.ships.filter(s =>
-    s.owner === perspectivePlayerId &&
-    canBattleshipBombard(node, s, perspectivePlayerId, gameState)
-  );
-  const canBombardPlanet = isMyTurn && isCombatPhase && isEnemyOrNpcPlanet && !enemyShipsInOrbit && !friendlyTroopsOnSurface && enemyGroundUnits.length > 0 && bombardCapableBattleships.length > 0;
+  const bombardShips = node.ships.filter(s => s.owner === perspectivePlayerId && s.hp > 0 && s.dmgMax > 0 && s.type !== 'ColonyShip');
+  const bombardReadyShips = bombardShips.filter(s => canBattleshipBombard(node, s, perspectivePlayerId, gameState));
+  const canBombardPlanet = isMyTurn && isCombatPhase && isEnemyOrNpcPlanet && !enemyShipsInOrbit && !friendlyTroopsOnSurface && enemyGroundUnits.length > 0 && bombardReadyShips.length > 0;
+  const autoSpaceQueued = hasQueuedAutoAction(gameState, node.id, perspectivePlayerId, 'auto_space_combat');
+  const autoInvasionQueued = hasQueuedAutoAction(gameState, node.id, perspectivePlayerId, 'auto_invasion');
+  const autoGroundQueued = hasQueuedAutoAction(gameState, node.id, perspectivePlayerId, 'auto_ground_combat');
+  const autoBombardQueued = hasQueuedAutoAction(gameState, node.id, perspectivePlayerId, 'auto_orbital_bombardment');
+  const canAutoBombardPlanet = isMyTurn && isCombatPhase && isEnemyOrNpcPlanet && !enemyShipsInOrbit && !friendlyTroopsOnSurface && enemyGroundUnits.length > 0 && bombardShips.length > 0;
   const hasAnyCombatWindow = isCombatPhase && (
     isEnemyOrNpcPlanet
     || myCombatShips.length > 0
@@ -246,21 +253,16 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   };
 
   const handleAutoSpaceCombat = async () => {
-    if (!spaceCombatAvailable || busyAction) return;
+    if ((!spaceCombatAvailable && !autoSpaceQueued) || busyAction) return;
+    const wasQueued = autoSpaceQueued;
     setBusyAction('auto-space');
-    setFiringLaser(true);
-    audio.playLaser();
-    try {
-      const result = autoResolveSpaceBattle(gameState, node.id, perspectivePlayerId);
-      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
-      if (result.changed) {
-        if (!result.state.activeCombatNodeId) audio.playExplosion();
-        await onUpdateState(result.state);
-      }
-    } finally {
-      setFiringLaser(false);
-      setBusyAction(null);
+    audio.playBeep(wasQueued ? 260 : 540, 0.1);
+    const updated = startAutoSpaceBattle(gameState, node.id, perspectivePlayerId);
+    if (updated !== gameState) {
+      setCombatReport(prev => [wasQueued ? 'Auto space combat stopped.' : `Timed auto space combat queued. First volley in ${REALTIME_ACTION_SECONDS.combatRound}s.`, ...prev]);
+      await onUpdateState(updated);
     }
+    setBusyAction(null);
   };
 
   const handleOrbitalBombardment = async () => {
@@ -289,36 +291,43 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
+  const handleAutoOrbitalBombardment = async () => {
+    if ((!canAutoBombardPlanet && !autoBombardQueued) || busyAction) return;
+    const wasQueued = autoBombardQueued;
+    setBusyAction('auto-bombard');
+    audio.playBeep(wasQueued ? 260 : 620, 0.12);
+    const updated = startAutoOrbitalBombardment(gameState, node.id, perspectivePlayerId);
+    if (updated !== gameState) {
+      setCombatReport(prev => [wasQueued ? 'Auto orbital bombardment stopped.' : `Automatic orbital bombardment queued. Ships will fire as their ${REALTIME_ACTION_SECONDS.bombardCooldown}s cooldowns finish.`, ...prev]);
+      await onUpdateState(updated);
+    }
+    setBusyAction(null);
+  };
+
   const handleAutoInvadePlanet = async () => {
-    if (!canInvadePlanet || busyAction) return;
+    if ((!canInvadePlanet && !autoInvasionQueued) || busyAction) return;
+    const wasQueued = autoInvasionQueued;
     setBusyAction('auto-invade');
     audio.playMove();
-    try {
-      const result = autoResolvePlanetInvasion(gameState, node.id, myPlayerId);
-      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
-      if (result.changed) {
-        if (!result.state.activeCombatNodeId) audio.playVictory();
-        await onUpdateState(result.state);
-      }
-    } finally {
-      setBusyAction(null);
+    const updated = startAutoInvasion(gameState, node.id, myPlayerId);
+    if (updated !== gameState) {
+      setCombatReport(prev => [wasQueued ? 'Auto invasion stopped.' : `Timed auto invasion queued. First assault step in ${REALTIME_ACTION_SECONDS.combatRound}s.`, ...prev]);
+      await onUpdateState(updated);
     }
+    setBusyAction(null);
   };
 
   const handleAutoGroundCombat = async () => {
-    if (!groundCombatAvailable || busyAction) return;
+    if ((!groundCombatAvailable && !autoGroundQueued) || busyAction) return;
+    const wasQueued = autoGroundQueued;
     setBusyAction('auto-ground');
-    audio.playBeep(240, 0.12);
-    try {
-      const result = autoResolvePlanetInvasion(gameState, node.id, myPlayerId);
-      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
-      if (result.changed) {
-        if (!result.state.activeCombatNodeId) audio.playVictory();
-        await onUpdateState(result.state);
-      }
-    } finally {
-      setBusyAction(null);
+    audio.playBeep(wasQueued ? 160 : 240, 0.12);
+    const updated = startAutoGroundBattle(gameState, node.id, myPlayerId);
+    if (updated !== gameState) {
+      setCombatReport(prev => [wasQueued ? 'Auto ground combat stopped.' : `Timed auto ground combat queued. Next clash in ${REALTIME_ACTION_SECONDS.combatRound}s.`, ...prev]);
+      await onUpdateState(updated);
     }
+    setBusyAction(null);
   };
 
   const handleGroundCombat = () => {
@@ -348,7 +357,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   };
 
   return (
-    <div className="space-y-4 max-h-[350px] overflow-y-auto p-1 font-mono">
+    <div className="space-y-4 p-1 font-mono">
       {firingLaser && (
         <div className="fixed inset-0 z-50 bg-red-600/10 pointer-events-none flex items-center justify-center animate-ping">
           <div className="text-2xl font-bold text-red-500 uppercase tracking-widest drop-shadow-[0_0_10px_red]">
@@ -381,7 +390,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
               <Crosshair className="h-3.5 w-3.5" />
               <span>ORBITAL BOMBARDMENT</span>
             </span>
-            <span className="text-[10px] text-slate-500">BattleShips only • timed bombardment</span>
+            <span className="text-[10px] text-slate-500">All combat ships • 10s cooldown</span>
           </div>
 
           {friendlyTroopsOnSurface && (
@@ -390,27 +399,36 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             </div>
           )}
 
-          {!friendlyTroopsOnSurface && bombardCapableBattleships.length === 0 && (
+          {!friendlyTroopsOnSurface && bombardShips.length === 0 && (
             <div className="text-[10px] text-slate-500 italic">
-              No BattleShips available to bombard right now.
+              No combat ships are in orbit to bombard right now.
             </div>
           )}
 
-          {!friendlyTroopsOnSurface && bombardCapableBattleships.length > 0 && (
+          {!friendlyTroopsOnSurface && bombardShips.length > 0 && (
             <div className="space-y-3">
+              <button
+                onClick={handleAutoOrbitalBombardment}
+                disabled={(!canAutoBombardPlanet && !autoBombardQueued) || busyAction !== null}
+                className="w-full py-2.5 bg-cyan-950/35 border border-cyan-500 text-cyan-300 rounded hover:bg-cyan-900/25 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
+              >
+                <Crosshair className="h-4 w-4" />
+                <span>{busyAction === 'auto-bombard' ? (autoBombardQueued ? 'Stopping...' : 'Auto Bombarding...') : autoBombardQueued ? 'Stop Auto Bombard' : 'Auto Bombard With All Ships'}</span>
+              </button>
+
               <div>
-                <span className="block text-[9px] text-slate-400 uppercase font-bold mb-1">Select Bombarding BattleShip</span>
+                <span className="block text-[9px] text-slate-400 uppercase font-bold mb-1">Select Bombarding Ship</span>
                 <div className="grid grid-cols-2 gap-1.5">
-                  {bombardCapableBattleships.map((s) => (
+                  {bombardShips.map((s) => (
                     <button
                       key={s.id}
                       onClick={() => { if (!isMyTurn) return; audio.playBeep(650, 0.04); setSelectedBombardShipId(s.id); }}
-                      disabled={!isMyTurn || busyAction !== null}
+                      disabled={!isMyTurn || busyAction !== null || !canBattleshipBombard(node, s, perspectivePlayerId, gameState)}
                       className={`p-2 border text-left rounded text-[11px] transition-all disabled:opacity-40 ${selectedBombardShipId === s.id ? 'border-sky-400 bg-sky-950/25 text-sky-300' : 'border-slate-800 bg-slate-950/50 text-slate-400'}`}
                     >
-                      <div className="font-bold">BattleShip</div>
+                      <div className="font-bold">{s.type}</div>
                       <HealthBar hp={s.hp} maxHp={s.maxHp} label="Hull" className="mt-1" />
-                      <div className="text-[9px] text-slate-500 font-mono mt-0.5">Bombard: {s.dmgMin}-{s.dmgMax}</div>
+                      <div className="text-[9px] text-slate-500 font-mono mt-0.5">Bombard: {s.dmgMin}-{s.dmgMax}{getBombardmentCooldownRemaining(s) > 0 ? ` • CD ${getBombardmentCooldownRemaining(s)}s` : ''}</div>
                     </button>
                   ))}
                 </div>
@@ -475,11 +493,11 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
           )}
           <button
             onClick={handleAutoInvadePlanet}
-            disabled={!canInvadePlanet || busyAction !== null}
+            disabled={(!canInvadePlanet && !autoInvasionQueued) || busyAction !== null}
             className="w-full min-h-[44px] py-2.5 bg-red-950/30 border border-red-500 text-red-400 rounded hover:bg-red-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40 scifi-danger-action"
           >
             <Crosshair className="h-4 w-4" />
-            <span>{!isMyTurn ? 'Invade Planet' : busyAction === 'auto-invade' ? 'Auto Invading...' : 'Auto Invade Until Captured'}</span>
+            <span>{!isMyTurn ? 'Invade Planet' : busyAction === 'auto-invade' ? (autoInvasionQueued ? 'Stopping...' : 'Auto Invading...') : autoInvasionQueued ? 'Stop Auto Invade' : 'Auto Invade Until Captured'}</span>
           </button>
         </div>
       )}
@@ -500,11 +518,11 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             <div className="space-y-3">
               <button
                 onClick={handleAutoSpaceCombat}
-                disabled={!spaceCombatAvailable || busyAction !== null}
+                disabled={(!spaceCombatAvailable && !autoSpaceQueued) || busyAction !== null}
                 className="w-full py-2.5 bg-red-950/40 border border-red-500 text-red-300 rounded hover:bg-red-900/30 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
               >
                 <Crosshair className="h-4 w-4" />
-                <span>{busyAction === 'auto-space' ? 'Auto Resolving...' : 'Auto Attack Until Orbit Clear'}</span>
+                <span>{busyAction === 'auto-space' ? (autoSpaceQueued ? 'Stopping...' : 'Auto Resolving...') : autoSpaceQueued ? 'Stop Auto Attack' : 'Auto Attack Until Orbit Clear'}</span>
               </button>
 
               <button
@@ -599,11 +617,11 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             <div className="space-y-3">
               <button
                 onClick={handleAutoGroundCombat}
-                disabled={!groundCombatAvailable || busyAction !== null}
+                disabled={(!groundCombatAvailable && !autoGroundQueued) || busyAction !== null}
                 className="w-full py-2.5 bg-amber-950/40 border border-amber-500 text-amber-300 rounded hover:bg-amber-900/30 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
               >
                 <Crosshair className="h-4 w-4" />
-                <span>{busyAction === 'auto-ground' ? 'Auto Resolving...' : 'Auto Resolve Ground Battle'}</span>
+                <span>{busyAction === 'auto-ground' ? (autoGroundQueued ? 'Stopping...' : 'Auto Resolving...') : autoGroundQueued ? 'Stop Auto Ground Battle' : 'Auto Resolve Ground Battle'}</span>
               </button>
               <div className="space-y-2">
                 <div>

@@ -42,7 +42,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    const interval = window.setInterval(() => setNow(Date.now()), 40);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -264,7 +264,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   const nextGeneration = nextDev ? getPlanetResourceGeneration(nextDev) : currentGeneration;
 
   return (
-    <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
+    <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-6">
 
       {!canBuild && (
         <div className="text-center text-xs text-slate-500 py-4 bg-slate-950/40 border border-slate-900 rounded font-mono">

@@ -15,7 +15,11 @@ const colorClass = {
   green: 'text-emerald-400 border-emerald-500/40 bg-emerald-950/20',
   blue: 'text-blue-400 border-blue-500/40 bg-blue-950/20',
   purple: 'text-violet-400 border-violet-500/40 bg-violet-950/20',
-  yellow: 'text-amber-400 border-amber-500/40 bg-amber-950/20'
+  yellow: 'text-amber-400 border-amber-500/40 bg-amber-950/20',
+  red: 'text-red-400 border-red-500/40 bg-red-950/20',
+  cyan: 'text-cyan-400 border-cyan-500/40 bg-cyan-950/20',
+  orange: 'text-orange-400 border-orange-500/40 bg-orange-950/20',
+  pink: 'text-pink-400 border-pink-500/40 bg-pink-950/20'
 };
 
 export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPlayerId, onClose, onUpdateState }) => {
@@ -26,7 +30,7 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
     .filter(a => a.status === 'breaking' && a.playerIds.includes(myPlayerId))
     .map(a => a.playerIds.find(id => id !== myPlayerId) || '')), [gameState.alliances, myPlayerId]);
 
-  const updateAlliance = async (otherId: string, action: 'request' | 'accept' | 'cancel' | 'break') => {
+  const updateAlliance = async (otherId: string, action: 'request' | 'accept' | 'cancel' | 'decline' | 'break') => {
     if (!me) return;
     audio.playBeep(650, 0.06);
     const other = gameState.players.find(p => p.id === otherId);
@@ -43,10 +47,12 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
       if (!existing || existing.status !== 'requested' || existing.requestedBy === myPlayerId) return;
       nextAlliances = alliances.map(a => a.id === existing.id ? { ...a, status: 'active', requestedBy: undefined } : a);
       log.push(`${me.name} accepted ${other?.name || 'another empire'}'s alliance request. FTL inhibitors are friendly and combat is blocked between allies.`);
-    } else if (action === 'cancel') {
+    } else if (action === 'cancel' || action === 'decline') {
       if (!existing || existing.status !== 'requested') return;
       nextAlliances = alliances.filter(a => a.id !== existing.id);
-      log.push(`${me.name} cancelled the alliance request with ${other?.name || 'another empire'}.`);
+      log.push(action === 'decline'
+        ? `${me.name} declined ${other?.name || 'another empire'}'s alliance request.`
+        : `${me.name} cancelled the alliance request with ${other?.name || 'another empire'}.`);
     } else {
       if (!existing || existing.status !== 'active') return;
       nextAlliances = alliances.filter(a => a.id !== existing.id);
@@ -57,7 +63,7 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
       ...gameState,
       alliances: nextAlliances,
       actionLog: [...gameState.actionLog, ...log],
-      lastAction: action === 'request' ? 'alliance_requested' : action === 'accept' ? 'alliance_accepted' : action === 'cancel' ? 'alliance_request_cancelled' : 'alliance_ended',
+      lastAction: action === 'request' ? 'alliance_requested' : action === 'accept' ? 'alliance_accepted' : action === 'decline' ? 'alliance_declined' : action === 'cancel' ? 'alliance_request_cancelled' : 'alliance_ended',
       lastActionAt: new Date().toISOString(),
       lastUpdated: new Date().toISOString()
     });
@@ -101,12 +107,20 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
                     <ShieldX className="h-3.5 w-3.5" /> Break
                   </button>
                 ) : requestToMe ? (
-                  <button
-                    onClick={() => updateAlliance(player.id, 'accept')}
-                    className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-emerald-500/50 bg-emerald-950/30 text-emerald-300 flex items-center gap-1"
-                  >
-                    <Handshake className="h-3.5 w-3.5" /> Accept
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => updateAlliance(player.id, 'decline')}
+                      className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-rose-500/50 bg-rose-950/30 text-rose-300 flex items-center gap-1"
+                    >
+                      Decline
+                    </button>
+                    <button
+                      onClick={() => updateAlliance(player.id, 'accept')}
+                      className="min-h-[44px] px-3 py-2 text-xs font-bold uppercase rounded border border-emerald-500/50 bg-emerald-950/30 text-emerald-300 flex items-center gap-1"
+                    >
+                      <Handshake className="h-3.5 w-3.5" /> Accept
+                    </button>
+                  </div>
                 ) : requestFromMe ? (
                   <button
                     onClick={() => updateAlliance(player.id, 'cancel')}

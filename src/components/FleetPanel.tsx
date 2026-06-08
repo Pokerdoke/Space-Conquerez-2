@@ -43,7 +43,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   }, [gameState]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    const interval = window.setInterval(() => setNow(Date.now()), 40);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -66,7 +66,11 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
       green: 'text-emerald-400',
       blue: 'text-blue-400',
       purple: 'text-violet-400',
-      yellow: 'text-amber-400'
+      yellow: 'text-amber-400',
+      red: 'text-red-400',
+      cyan: 'text-cyan-400',
+      orange: 'text-orange-400',
+      pink: 'text-pink-400'
     };
     return mappings[color];
   };
@@ -210,7 +214,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   const canManageTroops = isFriendlyNode;
 
   return (
-    <div className="space-y-4 max-h-[350px] overflow-y-auto p-1">
+    <div className="space-y-4 p-1">
 
 
       {(gameState.pendingActions || []).filter(action => action.nodeId === node.id || action.targetNodeId === node.id).length > 0 && (

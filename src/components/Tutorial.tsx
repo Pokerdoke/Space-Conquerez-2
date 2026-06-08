@@ -1,6 +1,24 @@
-import React, { useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Flag, Rocket, Factory, Crosshair, Shield, RadioTower, Lightbulb, X, CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bomb,
+  CheckCircle2,
+  Coins,
+  Crosshair,
+  Flag,
+  Handshake,
+  Lightbulb,
+  RadioTower,
+  Rocket,
+  Shield,
+  Timer,
+  Wrench,
+  X,
+  Zap
+} from 'lucide-react';
 import { audio } from '../services/audio';
+import { tutorialScenarioMeta } from '../services/tutorialScenarios';
 import type { TutorialScenarioId } from '../services/tutorialScenarios';
 
 interface TutorialProps {
@@ -10,151 +28,152 @@ interface TutorialProps {
 
 type TutorialLevel = {
   id: TutorialScenarioId;
-  title: string;
   subtitle: string;
   icon: React.ReactNode;
-  objective: string;
   scenario: string;
-  exactSteps: string[];
   success: string;
   tips: string[];
 };
 
+const COMPLETED_STORAGE_KEY = 'space_conquererz_2_tutorial_completed_v2';
+
 const tutorialLevels: TutorialLevel[] = [
   {
+    id: 'real-time-basics',
+    subtitle: 'Learn the new no-turn command flow, timers, income ticks, and queue behavior.',
+    icon: <Timer className="h-5 w-5" />,
+    scenario: 'You start on Helios Command with credits, ships, troops, a shipyard, and nearby planets to inspect while the real-time systems keep running.',
+    success: 'You understand where to find income, upkeep, action timers, and the Exit Tutorial control.',
+    tips: [
+      'The screen can update quickly, but official saves are versioned so old states should not overwrite newer actions.',
+      'Real-time does not mean every action is instant. Movement, construction, combat, and cooldowns still take time.'
+    ]
+  },
+  {
     id: 'colonize',
-    title: 'Level 1 — Colonizing a New Planet',
-    subtitle: 'Turn an empty system into your empire territory.',
+    subtitle: 'Claim neutral planets while movement and colonization run as real-time actions.',
     icon: <Flag className="h-5 w-5" />,
-    objective: 'Claim a neutral planet with a Colony Ship during the Action phase.',
-    scenario: 'You start with a homeworld, a Colony Ship in orbit, and an empty connected planet named Vega Outpost.',
-    exactSteps: [
-      'Click your homeworld on the star map.',
-      'Select your Colony Ship in the fleet list.',
-      'During the Movement phase, click the glowing reachable empty planet to move there.',
-      'Press Next Phase until the game reaches the Action phase.',
-      'Select the planet with the Colony Ship, then click Colonize Planet.',
-      'The planet becomes yours, starts as a Colony, and begins producing resources on your future turns.'
-    ],
-    success: 'You win this lesson when the neutral node changes to your player color and its development reads Colony.',
+    scenario: 'New Dawn has a Colony Ship and an escort. Vega Outpost is empty and connected, so it is ready to be claimed.',
+    success: 'The neutral planet changes to your color and becomes a Colony.',
     tips: [
-      'Colony Ships are not combat ships. Escort them if enemies are nearby.',
-      'You do not auto-claim a planet by flying over it. You must use the colonize action.'
+      'Colony Ships are weak and do not block enemy movement.',
+      'You can start another order while colonization is counting down.'
     ]
   },
   {
-    id: 'movement',
-    title: 'Level 2 — Ship Movement Basics',
-    subtitle: 'Move fleets through linked systems without wasting movement.',
+    id: 'development-economy',
+    subtitle: 'Use upgraded surrounding planets to unlock Arcology and Coreworld development.',
+    icon: <Coins className="h-5 w-5" />,
+    scenario: 'Capital Arcology is surrounded by upgraded friendly planets, showing how the high-level development requirement works.',
+    success: 'You can explain why the linked upgraded planets matter and how development raises revenue.',
+    tips: [
+      'Arcology and Coreworld upgrades are strongest near clusters of developed friendly worlds.',
+      'More economy gives more income, but large fleets and armies reduce net income through upkeep.'
+    ]
+  },
+  {
+    id: 'infrastructure',
+    subtitle: 'Build shipyards, FTL inhibitors, and gateways without the old phase system.',
+    icon: <Wrench className="h-5 w-5" />,
+    scenario: 'Forge Station is ready to build infrastructure. Bastion Gate shows a completed defensive chokepoint.',
+    success: 'You know where to queue infrastructure and what each structure is for.',
+    tips: [
+      'Shipyards are for production and faster repairs.',
+      'FTL inhibitors slow enemy breakthroughs, but only if you can defend the planet.'
+    ]
+  },
+  {
+    id: 'fleet-controls',
+    subtitle: 'Move whole fleets, specific ship types, and fully load carriers.',
     icon: <Rocket className="h-5 w-5" />,
-    objective: 'Move a Destroyer through safe connected systems and stop before hostile territory.',
-    scenario: 'Your Destroyer has 6 movement points. Friendly and neutral systems are open, but enemy combat ships can block travel through a system.',
-    exactSteps: [
-      'Enter the Movement phase.',
-      'Click the system that contains your ship.',
-      'Click the ship you want to move. Valid destinations glow on the map.',
-      'Click a glowing destination to move the ship there.',
-      'Watch the movement cost in the action log. Longer paths use more movement points.',
-      'Stop in a system if the next jump would put you past a hostile combat ship or FTL inhibitor.'
-    ],
-    success: 'You win this lesson when your Destroyer reaches the marked rally point with movement remaining.',
+    scenario: 'Rally Shipyard has Battleships, Destroyers, a Carrier, a Colony Ship, and enough ground units to practice the new controls.',
+    success: 'You can move all ships, move by type, expand ship lists, and load a carrier with one button.',
     tips: [
-      'Fighters cannot move by themselves in this version.',
-      'Carriers, Destroyers, and Battleships can act as movement blockers for enemies.'
-    ]
-  },
-  {
-    id: 'development',
-    title: 'Level 3 — Development & Production',
-    subtitle: 'Upgrade planets and build the economy that funds your fleets.',
-    icon: <Factory className="h-5 w-5" />,
-    objective: 'Upgrade a Colony into a City, then use that City to build ground troops.',
-    scenario: 'You own a Colony with enough resources to develop it. The Build phase is active.',
-    exactSteps: [
-      'Start during the Build phase.',
-      'Click one of your owned planets.',
-      'Open the Build panel and click Upgrade Planet if you can afford the listed cost.',
-      'Watch your resources drop immediately and the planet development update immediately.',
-      'Once the planet is a City or Metropolis, click Build Ground Unit (3R).',
-      'Cities can build 3 ground units per turn; Metropolises can build 6 per turn.'
-    ],
-    success: 'You win this lesson when the planet becomes a City and at least one friendly ground unit appears on the node.',
-    tips: [
-      'Higher development increases resource generation every turn.',
-      'Build Shipyards on key planets so new ships can be produced near the front and damaged ships or troops can repair to full in one friendly turn.'
+      'Use ship-type movement when you want Battleships to reinforce but Colony Ships to stay safe.',
+      'Fully Load Carrier takes up to 3 troops from the planet immediately.'
     ]
   },
   {
     id: 'space-combat',
-    title: 'Level 4 — Space Combat',
-    subtitle: 'Clear enemy ships before invading or moving safely through a system.',
+    subtitle: 'Use timed auto attack without making large battles resolve instantly.',
     icon: <Crosshair className="h-5 w-5" />,
-    objective: 'Destroy enemy combat ships in orbit using the combat panel.',
-    scenario: 'A hostile Destroyer guards a planet. Your Destroyer and Battleship are in the same system during the Action phase.',
-    exactSteps: [
-      'Reach the Action phase with your ships in the same node as enemy ships.',
-      'Select the contested node on the map.',
-      'In the combat panel, select one of your attacking ships.',
-      'Select one enemy defending ship.',
-      'Click Attack. Both sides deal damage based on their damage range.',
-      'Repeat until enemy combat ships are destroyed or your fleet is forced to stop.'
-    ],
-    success: 'You win this lesson when there are no enemy combat ships left in orbit.',
+    scenario: 'Both fleets are already at Clash Point. Reinforcements wait at Reserve Dock so you can practice timing.',
+    success: 'Enemy combat ships are destroyed or you intentionally stop auto attack to wait for reinforcements.',
     tips: [
-      'Battleships hit harder and have more HP than Destroyers.',
-      'Carriers can fight, but their biggest value is bringing ground troops for invasions.'
+      'Auto attack can be toggled off by pressing Stop Auto Attack.',
+      'Large battles should take enough time for reinforcement decisions.'
     ]
   },
   {
     id: 'invasion',
-    title: 'Level 5 — Planet Invasion',
-    subtitle: 'Use carriers and ground troops to capture enemy or NPC planets.',
+    subtitle: 'Capture NPC planets with carriers and timed ground combat.',
     icon: <Shield className="h-5 w-5" />,
-    objective: 'Drop troops from a Carrier, win ground combat, and capture the planet.',
-    scenario: 'Your Carrier is over an enemy/NPC planet with ground troops inside. Space combat has already cleared enemy combat ships from orbit.',
-    exactSteps: [
-      'Build Ground Units on a City or Metropolis during the Build phase.',
-      'During the Movement phase on a friendly node, select a Carrier and click Load Troops.',
-      'Move the Carrier to the enemy or NPC planet.',
-      'In the Action phase, select that planet. If space is clear, click Invade Planet.',
-      'All carried ground troops drop onto the planet together.',
-      'If defenders exist, select one attacking troop and one defending troop, then click Attack.',
-      'When all defender troops are destroyed, the planet automatically changes to the invading player. Surviving attackers stay as the garrison.',
-      'If all attackers die first, the invasion fails and the planet stays with the defender.'
-    ],
-    success: 'You win this lesson when the planet border changes to your color after the last defender dies.',
+    scenario: 'A loaded Carrier is already above Garrison World (NPC), which has defending ground troops but no hostile ships in orbit.',
+    success: 'The NPC defenders are defeated, the planet flips to you, and “(NPC)” disappears from the name.',
     tips: [
-      'You cannot invade while enemy combat ships are still in orbit.',
-      'Bring more than one troop. Ground combat is simultaneous, so attackers can die too.'
+      'Ships cannot capture planets by themselves. You need surviving ground troops.',
+      'Auto invade and auto ground combat should run in timed rounds, not instantly.'
     ]
   },
   {
-    id: 'advanced',
-    title: 'Level 6 — Advanced Strategy',
-    subtitle: 'Use FTL inhibitors, shipyards, carriers, and timing to control the map.',
-    icon: <RadioTower className="h-5 w-5" />,
-    objective: 'Build defensive chokepoints and plan a safe invasion route.',
-    scenario: 'Two empires are connected by a narrow chain of systems. A fortified system can slow enemy movement and protect your core worlds.',
-    exactSteps: [
-      'Identify chokepoints: systems with only one or two links between empires.',
-      'Place combat ships there. Destroyers, Battleships, and Carriers stop enemy ships from moving through the system.',
-      'Build an FTL Inhibitor structure on important planets for a permanent blocker while you own the planet.',
-      'Remember: enemies may enter an inhibited system, but cannot pass through it until the planet is captured.',
-      'Build Shipyards near the front so reinforcements do not travel as far. Damaged ships and troops repair to full in one turn at a Shipyard, or recover over about 2–3 turns in friendly territory without one.',
-      'Use carriers to carry up to 3 ground troops, clear orbit first, then invade during the Action phase.'
-    ],
-    success: 'You win this lesson when your fleet holds the chokepoint and your Carrier captures the target planet behind it.',
+    id: 'orbital-bombardment',
+    subtitle: 'Soften defenders with paced auto bombardment and 10-second ship cooldowns.',
+    icon: <Bomb className="h-5 w-5" />,
+    scenario: 'Your ships are above Bombardment Range with enemy ground troops below and no enemy ships in orbit.',
+    success: 'You can start and stop auto bombardment and understand why every ship waits on its own cooldown.',
     tips: [
-      'A blocker only helps if you can defend the system. Unsupported inhibitors eventually fall.',
-      'Do not spend everything on ships. Development pays for the next wave.'
+      'Auto bombard fires paced shots about every 2.5 seconds when ships are ready.',
+      'Bombardment cannot replace carriers if you need to actually claim the planet.'
+    ]
+  },
+  {
+    id: 'diplomacy-upkeep',
+    subtitle: 'Accept alliance requests and read gross income, upkeep, and net income.',
+    icon: <Handshake className="h-5 w-5" />,
+    scenario: 'A Rival Empire alliance request is already waiting, and your fleet is large enough to show meaningful upkeep.',
+    success: 'You respond to the alliance request and can explain your economy tooltip.',
+    tips: [
+      'Alliances should require the other player to accept or decline.',
+      'Allied ships should not be treated as hostile for movement, invasions, or auto-fire.'
+    ]
+  },
+  {
+    id: 'advanced-warfare',
+    subtitle: 'Combine chokepoints, reinforcements, auto combat, bombardment, and invasion.',
+    icon: <RadioTower className="h-5 w-5" />,
+    scenario: 'You have a fortified Bastion Gate, reinforcements in Reserve Dock, and an enemy Bulwark to break through.',
+    success: 'You can plan a full real-time attack instead of clicking every system randomly.',
+    tips: [
+      'Good timing matters: start combat, move reinforcements, stop auto combat if needed, then invade.',
+      'The strongest fleets still need economy and ground troops behind them.'
     ]
   }
 ];
 
+function loadCompletedLessons(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(COMPLETED_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) => {
   const [levelIndex, setLevelIndex] = useState(0);
-  const [completed, setCompleted] = useState<Record<string, boolean>>({});
+  const [completed, setCompleted] = useState<Record<string, boolean>>(loadCompletedLessons);
   const level = tutorialLevels[levelIndex];
+  const meta = tutorialScenarioMeta[level.id];
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(completed));
+    } catch {
+      // Ignore private browsing storage failures.
+    }
+  }, [completed]);
 
   const completedCount = useMemo(() => Object.values(completed).filter(Boolean).length, [completed]);
 
@@ -168,6 +187,11 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
     setCompleted(prev => ({ ...prev, [level.id]: true }));
   };
 
+  const clearMarks = () => {
+    audio.playBeep(220, 0.08);
+    setCompleted({});
+  };
+
   const next = () => {
     audio.playBeep(700, 0.05);
     setLevelIndex(i => Math.min(tutorialLevels.length - 1, i + 1));
@@ -178,12 +202,19 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
     setLevelIndex(i => Math.max(0, i - 1));
   };
 
+  const launchLesson = () => {
+    if (!onStartScenario) return;
+    audio.playVictory();
+    onStartScenario(level.id);
+  };
+
   return (
-    <div className="glass-panel rounded-lg border border-slate-800/80 overflow-hidden animate-fadeIn max-h-[78vh] flex flex-col">
+    <div className="glass-panel rounded-lg border border-slate-800/80 overflow-hidden animate-fadeIn max-h-[82vh] flex flex-col">
       <div className="flex items-center justify-between gap-3 p-4 border-b border-slate-800 bg-slate-950/70">
         <div>
           <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-cyan-400">Training Academy</p>
-          <h2 className="text-xl sm:text-2xl font-extrabold uppercase tracking-wider text-slate-100">How to Play</h2>
+          <h2 className="text-xl sm:text-2xl font-extrabold uppercase tracking-wider text-slate-100">Real-Time Tutorial System</h2>
+          <p className="text-xs text-slate-400 mt-1">Progress saves on this browser, so marked lessons stay done when you come back.</p>
         </div>
         <button
           onClick={onExit}
@@ -195,17 +226,18 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
         </button>
       </div>
 
-      <div className="grid md:grid-cols-[240px_1fr] min-h-0 flex-1">
+      <div className="grid md:grid-cols-[265px_1fr] min-h-0 flex-1">
         <aside className="border-b md:border-b-0 md:border-r border-slate-800 bg-slate-950/50 p-3 overflow-x-auto md:overflow-y-auto">
           <div className="flex md:flex-col gap-2 min-w-max md:min-w-0">
             {tutorialLevels.map((item, index) => {
               const active = index === levelIndex;
               const done = completed[item.id];
+              const itemMeta = tutorialScenarioMeta[item.id];
               return (
                 <button
                   key={item.id}
                   onClick={() => goToLevel(index)}
-                  className={`text-left rounded border px-3 py-3 min-w-[210px] md:min-w-0 transition-all ${
+                  className={`text-left rounded border px-3 py-3 min-w-[230px] md:min-w-0 transition-all ${
                     active
                       ? 'border-cyan-400/70 bg-cyan-950/30 text-cyan-100 shadow-[0_0_14px_rgba(34,211,238,0.15)]'
                       : 'border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-600 hover:text-slate-200'
@@ -213,7 +245,7 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
                 >
                   <div className="flex items-center gap-2">
                     <span className={active ? 'text-cyan-300' : 'text-slate-500'}>{item.icon}</span>
-                    <span className="text-xs font-bold uppercase tracking-wider">{item.title.replace('Level ', 'L')}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider">L{index + 1} — {itemMeta.title}</span>
                     {done && <CheckCircle2 className="h-4 w-4 ml-auto text-emerald-400" />}
                   </div>
                   <p className="text-[10px] mt-1 opacity-70 leading-snug normal-case font-sans">{item.subtitle}</p>
@@ -231,18 +263,26 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
                   {level.icon}
                 </div>
                 <div>
-                  <h3 className="text-xl sm:text-2xl font-extrabold uppercase tracking-wide text-slate-100">{level.title}</h3>
+                  <h3 className="text-xl sm:text-2xl font-extrabold uppercase tracking-wide text-slate-100">Level {levelIndex + 1} — {meta.title}</h3>
                   <p className="text-sm text-slate-400 mt-1">{level.subtitle}</p>
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-cyan-500/25 bg-cyan-950/10 p-4">
+                <div className="flex items-center gap-2 mb-2 text-cyan-300">
+                  <Zap className="h-4 w-4" />
+                  <p className="text-[10px] font-mono uppercase tracking-widest">Opening briefing</p>
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed">{meta.intro}</p>
               </div>
 
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="rounded border border-indigo-500/30 bg-indigo-950/20 p-3">
                   <p className="text-[10px] font-mono uppercase tracking-widest text-indigo-300 mb-1">Objective</p>
-                  <p className="text-sm text-slate-200 leading-relaxed">{level.objective}</p>
+                  <p className="text-sm text-slate-200 leading-relaxed">{meta.objective}</p>
                 </div>
                 <div className="rounded border border-slate-700/70 bg-slate-950/50 p-3">
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Scenario</p>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Playable setup</p>
                   <p className="text-sm text-slate-300 leading-relaxed">{level.scenario}</p>
                 </div>
               </div>
@@ -262,7 +302,7 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
                 <p className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Playable scenario</p>
                 {onStartScenario && (
                   <button
-                    onClick={() => { audio.playVictory(); onStartScenario(level.id); }}
+                    onClick={launchLesson}
                     className="scifi-btn scifi-btn-secondary px-3 py-2 text-xs inline-flex items-center gap-2"
                   >
                     <Rocket className="h-4 w-4" />
@@ -276,7 +316,7 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
             <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-400 mb-3">Exactly what to do</p>
             <ol className="space-y-2">
-              {level.exactSteps.map((step, index) => (
+              {meta.steps.map((step, index) => (
                 <li key={`${level.id}-${index}`} className="flex gap-3 text-sm text-slate-300 leading-relaxed">
                   <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-cyan-500/40 bg-cyan-950/30 text-[11px] font-bold text-cyan-300">{index + 1}</span>
                   <span>{step}</span>
@@ -303,18 +343,18 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
         </section>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 border-t border-slate-800 bg-slate-950/75">
+      <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 p-4 border-t border-slate-800 bg-slate-950/75">
         <div className="text-xs font-mono text-slate-500">
           Lesson {levelIndex + 1}/{tutorialLevels.length} • {completedCount}/{tutorialLevels.length} marked complete
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={previous} disabled={levelIndex === 0} className="scifi-btn px-3 py-2 flex items-center gap-2">
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
           {onStartScenario && (
             <button
-              onClick={() => { audio.playVictory(); onStartScenario(level.id); }}
+              onClick={launchLesson}
               className="scifi-btn scifi-btn-primary px-3 py-2 flex items-center gap-2"
             >
               <Rocket className="h-4 w-4" />
@@ -323,7 +363,10 @@ export const Tutorial: React.FC<TutorialProps> = ({ onExit, onStartScenario }) =
           )}
           <button onClick={markComplete} className="scifi-btn px-3 py-2 flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
-            Mark Done
+            {completed[level.id] ? 'Done Saved' : 'Mark Done'}
+          </button>
+          <button onClick={clearMarks} className="scifi-btn px-3 py-2 text-xs">
+            Reset Marks
           </button>
           {levelIndex < tutorialLevels.length - 1 ? (
             <button onClick={next} className="scifi-btn scifi-btn-secondary px-3 py-2 flex items-center gap-2">

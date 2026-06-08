@@ -10,6 +10,30 @@ const PUBLIC_LOBBY_TTL_MS = 1000 * 60 * 60 * 6; // hide abandoned public lobbies
 const getRoomKey = (code: string) => `void_empires_room_${code.toUpperCase()}`;
 const localChannel = new BroadcastChannel('void_empires_local_sync');
 
+export const PLAYER_COLOR_VALUES = ['green', 'blue', 'purple', 'yellow', 'red', 'cyan', 'orange', 'pink'] as const;
+
+export function normalizeCommanderName(value?: string): string {
+  const cleaned = (value || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+
+  return cleaned
+    .split(' ')
+    .map((word) => {
+      const lettersOnly = word.replace(/[^A-Za-z]/g, '');
+      const shouldTitleCase = lettersOnly.length > 0 && (word === word.toLowerCase() || word === word.toUpperCase());
+      if (!shouldTitleCase) return word;
+
+      return word
+        .split(/([-'])/)
+        .map((part) => {
+          if (part === '-' || part === "'" || part.length === 0) return part;
+          return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+        })
+        .join('');
+    })
+    .join(' ');
+}
+
 export type DbMode = 'local' | 'supabase';
 
 type GameRowStatus = 'lobby' | 'active' | 'finished';
@@ -32,6 +56,212 @@ function toGameRowStatus(status: GameState['status']): GameRowStatus {
   return 'lobby';
 }
 
+
+export function getStateVersion(state: GameState | null | undefined): number {
+  const value = state?.stateVersion;
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function normalizeGameState(state: GameState): GameState {
+  return {
+    ...state,
+    stateVersion: getStateVersion(state),
+    pendingActions: state.pendingActions || [],
+    alliances: state.alliances || [],
+    chat: state.chat || []
+  };
+}
+
+function stampGameState(state: GameState, version: number): GameState {
+  const now = new Date().toISOString();
+  return normalizeGameState({
+    ...state,
+    stateVersion: version,
+    lastUpdated: now,
+    lastActionAt: state.lastActionAt || now
+  });
+}
+
+
+type UpdateRoomStateOptions = {
+  /** Version the caller originally edited from. Defaults to state.stateVersion. */
+  expectedVersion?: number;
+  /** The exact local state before the caller made its changes. Used to replay only the actual delta on conflict. */
+  baseState?: GameState | null;
+  /** Keep true for normal actions. Disable only if a caller wants strict compare-and-swap behavior. */
+  retryMergedConflict?: boolean;
+};
+
+function jsonStable(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function sameEntity(a: unknown, b: unknown): boolean {
+  return jsonStable(a) === jsonStable(b);
+}
+
+function mergeEntityArrayByDelta<T extends { id: string }>(
+  latest: T[],
+  base: T[],
+  attempted: T[]
+): T[] {
+  const baseById = new Map(base.map(item => [item.id, item]));
+  const latestById = new Map(latest.map(item => [item.id, item]));
+  const attemptedById = new Map(attempted.map(item => [item.id, item]));
+  let merged = [...latest];
+
+  // Remove entities this client intentionally removed from its base snapshot.
+  for (const baseItem of base) {
+    if (!attemptedById.has(baseItem.id)) {
+      merged = merged.filter(item => item.id !== baseItem.id);
+      latestById.delete(baseItem.id);
+    }
+  }
+
+  // Add or update only entities this client actually changed.
+  for (const attemptedItem of attempted) {
+    const baseItem = baseById.get(attemptedItem.id);
+    const latestItem = latestById.get(attemptedItem.id);
+    const isNew = !baseItem;
+    const changedByClient = isNew || !sameEntity(baseItem, attemptedItem);
+    if (!changedByClient) continue;
+
+    if (!latestItem) {
+      merged.push(attemptedItem);
+    } else {
+      merged = merged.map(item => item.id === attemptedItem.id ? attemptedItem : item);
+    }
+  }
+
+  return merged;
+}
+
+function mergeActionLogByDelta(latest: string[], base: string[], attempted: string[]): string[] {
+  const newLines = attempted.slice(base.length);
+  if (newLines.length === 0) return latest;
+  return [...latest, ...newLines].slice(-120);
+}
+
+function mergePlayersByDelta(latest: Player[], base: Player[], attempted: Player[]): Player[] {
+  const baseById = new Map(base.map(player => [player.id, player]));
+  const attemptedById = new Map(attempted.map(player => [player.id, player]));
+  let merged = mergeEntityArrayByDelta(latest, base, attempted);
+
+  // Resources are special: merge the resource delta so income/upkeep from the latest state is not erased.
+  merged = merged.map(latestPlayer => {
+    const basePlayer = baseById.get(latestPlayer.id);
+    const attemptedPlayer = attemptedById.get(latestPlayer.id);
+    if (!basePlayer || !attemptedPlayer) return latestPlayer;
+    const resourceDelta = Number(((attemptedPlayer.resources || 0) - (basePlayer.resources || 0)).toFixed(3));
+    if (resourceDelta === 0) return latestPlayer;
+    return {
+      ...latestPlayer,
+      resources: Number(((latestPlayer.resources || 0) + resourceDelta).toFixed(3))
+    };
+  });
+
+  return merged;
+}
+
+function mergeNodeByDelta(latestNode: GameState['nodes'][number], baseNode: GameState['nodes'][number], attemptedNode: GameState['nodes'][number]): GameState['nodes'][number] {
+  const merged: GameState['nodes'][number] = { ...latestNode };
+  const scalarKeys: (keyof GameState['nodes'][number])[] = [
+    'claimedBy',
+    'development',
+    'resourceGeneration',
+    'hasShipyard',
+    'hasFtlInhibitor',
+    'hasGateway',
+    'groundUnitsBuiltThisTurn',
+    'isNpcPlanet',
+    'isDysonSphere',
+    'biome'
+  ];
+
+  for (const key of scalarKeys) {
+    if (!sameEntity(baseNode[key], attemptedNode[key])) {
+      (merged as unknown as Record<string, unknown>)[key as string] = attemptedNode[key];
+    }
+  }
+
+  merged.ships = mergeEntityArrayByDelta(latestNode.ships, baseNode.ships, attemptedNode.ships);
+  merged.groundUnits = mergeEntityArrayByDelta(latestNode.groundUnits, baseNode.groundUnits, attemptedNode.groundUnits);
+  return merged;
+}
+
+function mergeGameStateDelta(latest: GameState, base: GameState, attempted: GameState): GameState {
+  const latestNodesById = new Map(latest.nodes.map(node => [node.id, node]));
+  const baseNodesById = new Map(base.nodes.map(node => [node.id, node]));
+  const attemptedNodesById = new Map(attempted.nodes.map(node => [node.id, node]));
+
+  let nodes = [...latest.nodes];
+  for (const baseNode of base.nodes) {
+    if (!attemptedNodesById.has(baseNode.id)) {
+      nodes = nodes.filter(node => node.id !== baseNode.id);
+    }
+  }
+  for (const attemptedNode of attempted.nodes) {
+    const baseNode = baseNodesById.get(attemptedNode.id);
+    const latestNode = latestNodesById.get(attemptedNode.id);
+    if (!baseNode) {
+      if (!latestNode) nodes.push(attemptedNode);
+      continue;
+    }
+    if (!latestNode) continue;
+    if (sameEntity(baseNode, attemptedNode)) continue;
+    nodes = nodes.map(node => node.id === attemptedNode.id ? mergeNodeByDelta(latestNode, baseNode, attemptedNode) : node);
+  }
+
+  const merged: GameState = {
+    ...latest,
+    nodes,
+    players: mergePlayersByDelta(latest.players, base.players, attempted.players),
+    pendingActions: mergeEntityArrayByDelta(latest.pendingActions || [], base.pendingActions || [], attempted.pendingActions || []),
+    alliances: mergeEntityArrayByDelta(latest.alliances || [], base.alliances || [], attempted.alliances || []),
+    chat: mergeEntityArrayByDelta(latest.chat || [], base.chat || [], attempted.chat || []),
+    actionLog: mergeActionLogByDelta(latest.actionLog || [], base.actionLog || [], attempted.actionLog || []),
+    lastAction: attempted.lastAction || latest.lastAction,
+    lastActionAt: attempted.lastActionAt || latest.lastActionAt,
+    lastUpdated: attempted.lastUpdated || latest.lastUpdated
+  };
+
+  const topLevelKeys: (keyof GameState)[] = [
+    'status',
+    'creatorId',
+    'maxPlayers',
+    'mapSize',
+    'galaxyType',
+    'npcCount',
+    'isPublic',
+    'activePlayerIndex',
+    'phase',
+    'turnNumber',
+    'winnerId',
+    'activeCombatNodeId',
+    'activeCombatUpdatedAt',
+    'activeCombatSummary',
+    'turnTimerMinutes',
+    'turnStartedAt',
+    'realtimeIncomeLastAt'
+  ];
+
+  for (const key of topLevelKeys) {
+    if (!sameEntity(base[key], attempted[key])) {
+      (merged as unknown as Record<string, unknown>)[key as string] = attempted[key];
+    }
+  }
+
+  return normalizeGameState(merged);
+}
+
+async function fetchSupabaseState(code: string): Promise<GameState | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const { data, error } = await client.from('games').select('state').eq('id', code).maybeSingle();
+  if (error || !data) return null;
+  return normalizeGameState(data.state as GameState);
+}
+
 function randomUuid(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -45,7 +275,7 @@ export function getLocalPlayerIdentity(preferredName?: string) {
     localStorage.setItem(PLAYER_ID_KEY, id);
   }
 
-  let name = preferredName?.trim() || localStorage.getItem(PLAYER_NAME_KEY) || '';
+  let name = normalizeCommanderName(preferredName || localStorage.getItem(PLAYER_NAME_KEY) || '');
   if (!name) {
     name = `StarPilot_${Math.floor(1000 + Math.random() * 9000)}`;
   }
@@ -65,16 +295,21 @@ function generateRoomCode(): string {
 }
 
 function colorForSlot(slotIndex: number): Player['color'] {
-  return (['green', 'blue', 'purple', 'yellow'] as Player['color'][])[slotIndex] || 'blue';
+  return PLAYER_COLOR_VALUES[slotIndex] || 'blue';
 }
 
-function makePlayer(id: string, name: string, slotIndex: number, ready: boolean): Player {
+function firstAvailableColor(players: Player[], fallbackSlot: number): Player['color'] {
+  const used = new Set(players.map((player) => player.color));
+  return PLAYER_COLOR_VALUES.find((color) => !used.has(color)) || colorForSlot(fallbackSlot);
+}
+
+function makePlayer(id: string, name: string, slotIndex: number, ready: boolean, color: Player['color'] = colorForSlot(slotIndex)): Player {
   return {
     id,
     uuid: id,
     playerNumber: slotIndex + 1,
-    name: name || `Player ${slotIndex + 1}`,
-    color: colorForSlot(slotIndex),
+    name: normalizeCommanderName(name) || `Player ${slotIndex + 1}`,
+    color,
     ready,
     resources: 20,
     isNpc: false,
@@ -102,6 +337,7 @@ function makeInitialState(
     npcCount,
     isPublic,
     status: 'lobby',
+    stateVersion: 0,
     players: [creator],
     activePlayerIndex: 0,
     phase: 0,
@@ -165,7 +401,7 @@ const localDb = {
     const cleanCode = code.trim().toUpperCase();
     const data = localStorage.getItem(getRoomKey(cleanCode));
     if (!data) throw new Error(`Room ${cleanCode} not found.`);
-    const state = JSON.parse(data) as GameState;
+    const state = normalizeGameState(JSON.parse(data) as GameState);
     const identity = getLocalPlayerIdentity(playerName);
     const existing = state.players.find(p => p.id === identity.id);
     if (existing) {
@@ -176,7 +412,7 @@ const localDb = {
     }
     if (state.status !== 'lobby') throw new Error('Game already started and this device is not a saved player.');
     if (state.players.length >= state.maxPlayers) throw new Error('Room is full.');
-    const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false);
+    const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false, firstAvailableColor(state.players, state.players.length));
     state.players.push(newPlayer);
     state.actionLog.push(`${newPlayer.name} joined the lobby.`);
     state.lastUpdated = new Date().toISOString();
@@ -199,7 +435,7 @@ const localDb = {
       .map(code => {
         const data = localStorage.getItem(getRoomKey(code));
         if (!data) return null;
-        const state = JSON.parse(data) as GameState;
+        const state = normalizeGameState(JSON.parse(data) as GameState);
         return summarizePublicGame(code, state);
       })
       .filter((room): room is PublicGameSummary => Boolean(room))
@@ -247,11 +483,11 @@ export async function getGameRoomState(code: string): Promise<GameState | null> 
     if (client) {
       const { data, error } = await client.from('games').select('state').eq('id', cleanCode).maybeSingle();
       if (error || !data) return null;
-      return data.state as GameState;
+      return normalizeGameState(data.state as GameState);
     }
   }
   const data = localStorage.getItem(getRoomKey(cleanCode));
-  return data ? JSON.parse(data) as GameState : null;
+  return data ? normalizeGameState(JSON.parse(data) as GameState) : null;
 }
 
 export async function leaveGameRoom(code: string, playerId: string): Promise<void> {
@@ -290,7 +526,7 @@ export async function leaveGameRoom(code: string, playerId: string): Promise<voi
 
   const updatedState: GameState = {
     ...state,
-    players: remaining.map((p, idx) => ({ ...p, playerNumber: idx + 1, color: colorForSlot(idx) })),
+    players: remaining.map((p, idx) => ({ ...p, playerNumber: idx + 1 })),
     creatorId: state.creatorId === playerId ? remaining[0].id : state.creatorId,
     maxPlayers: Math.max(state.maxPlayers, remaining.length) as GameState['maxPlayers'],
     actionLog: [...state.actionLog, `${leaving?.name || 'A commander'} left the lobby.`],
@@ -302,7 +538,7 @@ export async function leaveGameRoom(code: string, playerId: string): Promise<voi
   if (getDbMode() === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      await client.from('games').update({ state: updatedState, updated_at: updatedState.lastUpdated, status: 'lobby' }).eq('id', cleanCode);
+      await updateRoomState(cleanCode, updatedState);
       await client.from('players').delete().eq('game_id', cleanCode).eq('display_name', leaving?.name || '');
     }
   } else {
@@ -317,61 +553,110 @@ export async function joinGameRoom(code: string, playerName: string): Promise<Ga
   if (mode === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      const { data, error } = await client.from('games').select('*').eq('id', cleanCode).single();
-      if (error || !data) throw new Error(`Room ${cleanCode} not found.`);
-      const state = data.state as GameState;
       const identity = getLocalPlayerIdentity(playerName);
-      const existing = state.players.find(p => p.id === identity.id);
-      if (existing) {
-        existing.name = identity.name;
-        state.lastUpdated = new Date().toISOString();
-        await client.from('games').update({ state, updated_at: state.lastUpdated, status: toGameRowStatus(state.status) }).eq('id', cleanCode);
-        localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
-        return state;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data, error } = await client.from('games').select('*').eq('id', cleanCode).single();
+        if (error || !data) throw new Error(`Room ${cleanCode} not found.`);
+        const state = normalizeGameState(data.state as GameState);
+        const existing = state.players.find(p => p.id === identity.id);
+        if (existing) {
+          existing.name = identity.name;
+          state.lastAction = 'rejoin_lobby';
+          state.lastActionAt = new Date().toISOString();
+          const saved = await updateRoomState(cleanCode, state);
+          localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
+          return saved;
+        }
+        if (state.status !== 'lobby') throw new Error('Game already started and this device is not one of the saved players.');
+        if (state.players.length >= state.maxPlayers) throw new Error('Room is full.');
+
+        const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false, firstAvailableColor(state.players, state.players.length));
+        const updatedState: GameState = {
+          ...state,
+          players: [...state.players, newPlayer],
+          actionLog: [...state.actionLog, `${newPlayer.name} joined the lobby.`],
+          lastAction: 'join_lobby',
+          lastActionAt: new Date().toISOString()
+        };
+        const saved = await updateRoomState(cleanCode, updatedState);
+        if (saved.players.some(p => p.id === newPlayer.id)) {
+          await client.from('players').insert([{ game_id: cleanCode, display_name: newPlayer.name, player_number: newPlayer.playerNumber, is_ready: false }]);
+          localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
+          return saved;
+        }
       }
-      if (state.status !== 'lobby') throw new Error('Game already started and this device is not one of the saved players.');
-      if (state.players.length >= state.maxPlayers) throw new Error('Room is full.');
-
-      const newPlayer = makePlayer(identity.id, identity.name, state.players.length, false);
-      state.players.push(newPlayer);
-      state.actionLog.push(`${newPlayer.name} joined the lobby.`);
-      state.lastAction = 'join_lobby';
-      state.lastActionAt = new Date().toISOString();
-      state.lastUpdated = state.lastActionAt;
-
-      const { error: updateError } = await client
-        .from('games')
-        .update({ state, updated_at: state.lastUpdated, status: 'lobby' })
-        .eq('id', cleanCode);
-      if (updateError) throw new Error(updateError.message);
-      await client.from('players').insert([{ game_id: cleanCode, display_name: newPlayer.name, player_number: newPlayer.playerNumber, is_ready: false }]);
-      localStorage.setItem(ACTIVE_GAME_KEY, cleanCode);
-      return state;
+      throw new Error('Could not join because the lobby changed at the same time. Try again.');
     }
   }
   return localDb.joinRoom(cleanCode, playerName);
 }
 
-export async function updateRoomState(code: string, state: GameState): Promise<void> {
+export async function updateRoomState(code: string, state: GameState, options: UpdateRoomStateOptions = {}): Promise<GameState> {
   const cleanCode = code.trim().toUpperCase();
-  const stamped: GameState = {
-    ...state,
-    lastUpdated: new Date().toISOString(),
-    lastActionAt: state.lastActionAt || new Date().toISOString()
+  let expectedVersion = options.expectedVersion ?? getStateVersion(state);
+  const retryMergedConflict = options.retryMergedConflict !== false;
+  let attemptedState = normalizeGameState(state);
+  let baseState = options.baseState ? normalizeGameState(options.baseState) : null;
+
+  const tryLocal = () => {
+    const stamped = stampGameState(attemptedState, expectedVersion + 1);
+    localDb.updateGameState(cleanCode, stamped);
+    return stamped;
   };
 
   if (getDbMode() === 'supabase') {
     const client = getSupabaseClient();
     if (client) {
-      const { error } = await client
-        .from('games')
-        .update({ state: stamped, updated_at: stamped.lastUpdated, status: toGameRowStatus(stamped.status) })
-        .eq('id', cleanCode);
-      if (error) throw new Error(error.message);
-      return;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const stamped = stampGameState(attemptedState, expectedVersion + 1);
+        const { data, error } = await client
+          .from('games')
+          .update({ state: stamped, updated_at: stamped.lastUpdated, status: toGameRowStatus(stamped.status) })
+          .eq('id', cleanCode)
+          .filter('state->>stateVersion', 'eq', String(expectedVersion))
+          .select('state')
+          .maybeSingle();
+
+        if (error) throw new Error(error.message);
+        if (data) return normalizeGameState(data.state as GameState);
+
+        const latest = await fetchSupabaseState(cleanCode);
+        if (!latest) throw new Error(`Room ${cleanCode} not found.`);
+
+        // One-time upgrade path for old rooms created before stateVersion existed.
+        if (expectedVersion === 0 && getStateVersion(latest) === 0 && attemptedState.lastUpdated === latest.lastUpdated) {
+          const { data: migrated, error: migrateError } = await client
+            .from('games')
+            .update({ state: stamped, updated_at: stamped.lastUpdated, status: toGameRowStatus(stamped.status) })
+            .eq('id', cleanCode)
+            .select('state')
+            .maybeSingle();
+          if (migrateError) throw new Error(migrateError.message);
+          if (migrated) return normalizeGameState(migrated.state as GameState);
+        }
+
+        if (!retryMergedConflict || !baseState) {
+          console.warn('Skipped stale state save to prevent rollback.', {
+            room: cleanCode,
+            attemptedVersion: expectedVersion,
+            latestVersion: latest.stateVersion
+          });
+          return latest;
+        }
+
+        // Another client saved first. Replay only this client's actual changes on top of the latest state,
+        // then try again. This prevents the visible "action happened then reverted" problem.
+        attemptedState = mergeGameStateDelta(latest, baseState, attemptedState);
+        baseState = latest;
+        expectedVersion = getStateVersion(latest);
+      }
+
+      const latest = await fetchSupabaseState(cleanCode);
+      if (latest) return latest;
     }
   }
-  localDb.updateGameState(cleanCode, stamped);
+
+  return tryLocal();
 }
 
 export async function updateLobbySettings(
@@ -400,8 +685,7 @@ export async function updateLobbySettings(
     ]
   };
 
-  await updateRoomState(code, updatedState);
-  return updatedState;
+  return await updateRoomState(code, updatedState);
 }
 
 export async function listPublicGameRooms(): Promise<PublicGameSummary[]> {
@@ -416,7 +700,7 @@ export async function listPublicGameRooms(): Promise<PublicGameSummary[]> {
         .limit(30);
       if (error) throw new Error(error.message);
       return (data || [])
-        .map((row: any) => summarizePublicGame(row.id, row.state as GameState, row.updated_at))
+        .map((row: any) => summarizePublicGame(row.id, normalizeGameState(row.state as GameState), row.updated_at))
         .filter((room: PublicGameSummary | null): room is PublicGameSummary => Boolean(room));
     }
   }
@@ -476,7 +760,7 @@ export function subscribeToRoom(code: string, onUpdate: (state: GameState) => vo
         .on(
           'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${cleanCode}` },
-          (payload) => onUpdate(payload.new.state as GameState)
+          (payload) => onUpdate(normalizeGameState(payload.new.state as GameState))
         )
         .subscribe((status) => {
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -488,15 +772,15 @@ export function subscribeToRoom(code: string, onUpdate: (state: GameState) => vo
   }
 
   const onBroadcast = (event: MessageEvent) => {
-    if (event.data?.code === cleanCode && event.data?.type === 'UPDATE') onUpdate(event.data.state);
+    if (event.data?.code === cleanCode && event.data?.type === 'UPDATE' && event.data.state) onUpdate(normalizeGameState(event.data.state));
   };
   const onStorageChange = (event: StorageEvent) => {
-    if (event.key === getRoomKey(cleanCode) && event.newValue) onUpdate(JSON.parse(event.newValue));
+    if (event.key === getRoomKey(cleanCode) && event.newValue) onUpdate(normalizeGameState(JSON.parse(event.newValue)));
   };
   localChannel.addEventListener('message', onBroadcast);
   window.addEventListener('storage', onStorageChange);
   const data = localStorage.getItem(getRoomKey(cleanCode));
-  if (data) onUpdate(JSON.parse(data));
+  if (data) onUpdate(normalizeGameState(JSON.parse(data)));
   return () => {
     localChannel.removeEventListener('message', onBroadcast);
     window.removeEventListener('storage', onStorageChange);
@@ -519,12 +803,12 @@ export async function sendRoomChatMessage(code: string, fromPlayer: Player, text
     if (client) {
       const { data } = await client.from('games').select('state').eq('id', cleanCode).single();
       if (data) {
-        const state = data.state as GameState;
+        const state = normalizeGameState(data.state as GameState);
         state.chat = [...(state.chat || []), newMessage];
         state.lastAction = 'chat';
         state.lastActionAt = newMessage.timestamp;
         state.lastUpdated = newMessage.timestamp;
-        await client.from('games').update({ state, updated_at: state.lastUpdated, status: toGameRowStatus(state.status) }).eq('id', cleanCode);
+        await updateRoomState(cleanCode, state);
       }
       return;
     }
@@ -532,7 +816,7 @@ export async function sendRoomChatMessage(code: string, fromPlayer: Player, text
 
   const data = localStorage.getItem(getRoomKey(cleanCode));
   if (data) {
-    const state = JSON.parse(data) as GameState;
+    const state = normalizeGameState(JSON.parse(data) as GameState);
     state.chat = [...(state.chat || []), newMessage];
     localDb.updateGameState(cleanCode, state);
   }

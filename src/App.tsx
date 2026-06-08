@@ -7,9 +7,9 @@ import { ChatPanel } from './components/ChatPanel';
 import { SoundToggle } from './components/SoundToggle';
 import { DiplomacyPanel } from './components/DiplomacyPanel';
 import type { GameState, StarNode, Ship } from './types';
-import { subscribeToRoom, updateRoomState, getDbMode, getGameRoomState } from './services/database';
+import { subscribeToRoom, updateRoomState, getDbMode, getGameRoomState, getStateVersion, normalizeGameState } from './services/database';
 import type { DbMode } from './services/database';
-import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration, processRealtimeActions, processRealtimeIncome, getMoveDurationSeconds, createPendingAction, formatSeconds, getPlayerEconomySummary } from './services/gameLogic';
+import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration, processRealtimeActions, processRealtimeIncome, getMoveDurationSeconds, createPendingAction, formatSeconds, getPlayerEconomySummary, REALTIME_INCOME_INTERVAL_SECONDS } from './services/gameLogic';
 import { audio } from './services/audio';
 import { createTutorialScenario, TUTORIAL_PLAYER_ID } from './services/tutorialScenarios';
 import type { TutorialScenarioId } from './services/tutorialScenarios';
@@ -71,11 +71,40 @@ const GarrisonsHudIcon = () => (
   </HudIconFrame>
 );
 
+const formatWholeResource = (value: number | undefined | null) => Math.round(Number(value || 0)).toString();
+
 type FleetMoveSelection = {
   nodeId: string;
   shipIds: string[];
   label: string;
 };
+
+function isAuthoritativeHost(state: GameState, playerId: string): boolean {
+  const fallbackHost = state.players.find(p => !p.isNpc)?.id;
+  return Boolean(playerId && (state.creatorId || fallbackHost) === playerId);
+}
+
+const ACTION_FAILOVER_GRACE_MS = 1200;
+const INCOME_FAILOVER_GRACE_MS = 3500;
+
+function getMostOverdueRealtimeActionMs(state: GameState, nowMs = Date.now()): number {
+  const pending = state.pendingActions || [];
+  if (pending.length === 0) return 0;
+
+  return pending.reduce((maxOverdue, action) => {
+    const completesAt = new Date(action.completesAt).getTime();
+    if (!Number.isFinite(completesAt)) return Math.max(maxOverdue, ACTION_FAILOVER_GRACE_MS + 1);
+    return Math.max(maxOverdue, nowMs - completesAt);
+  }, 0);
+}
+
+function getRealtimeIncomeOverdueMs(state: GameState, nowMs = Date.now()): number {
+  const lastIncomeMs = state.realtimeIncomeLastAt
+    ? new Date(state.realtimeIncomeLastAt).getTime()
+    : new Date(state.lastUpdated || state.lastActionAt || nowMs).getTime();
+  if (!Number.isFinite(lastIncomeMs)) return 0;
+  return nowMs - (lastIncomeMs + REALTIME_INCOME_INTERVAL_SECONDS * 1000);
+}
 
 export const App: React.FC = () => {
   const [view, setView] = useState<'lobby' | 'game' | 'tutorialGame'>('lobby');
@@ -83,6 +112,7 @@ export const App: React.FC = () => {
   const [myPlayerId, setMyPlayerId] = useState('');
   const [gameState, setGameState] = useState<GameState | null>(null);
   const isTutorialMode = view === 'tutorialGame';
+  const [tutorialIntroOpen, setTutorialIntroOpen] = useState(false);
 
   // Game UI State
   const [selectedNode, setSelectedNode] = useState<StarNode | null>(null);
@@ -100,6 +130,13 @@ export const App: React.FC = () => {
   const realtimeTickRef = useRef(false);
   const previousMyResourcesRef = useRef<number | null>(null);
   const [incomePops, setIncomePops] = useState<{ id: string; amount: number }[]>([]);
+  const gameStateRef = useRef<GameState | null>(null);
+  const pendingSaveCountRef = useRef(0);
+  const saveChainRef = useRef<Promise<GameState | null>>(Promise.resolve(null));
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   // Fog of war setting
   const [fogOfWar, setFogOfWar] = useState(false);
@@ -117,6 +154,57 @@ export const App: React.FC = () => {
       }
       return null;
     });
+  };
+
+  const applyLocalState = (state: GameState) => {
+    const normalized = normalizeGameState(state);
+    gameStateRef.current = normalized;
+    setGameState(normalized);
+    refreshSelectionsFromState(normalized);
+    return normalized;
+  };
+
+  const persistGameState = async (state: GameState, options: { retryMergedConflict?: boolean } = {}) => {
+    const baseState = gameStateRef.current ? normalizeGameState(gameStateRef.current) : null;
+    const baseVersion = getStateVersion(baseState);
+    const optimisticVersion = baseVersion + 1;
+    const optimisticState = normalizeGameState({
+      ...state,
+      stateVersion: optimisticVersion,
+      lastUpdated: new Date().toISOString(),
+      lastActionAt: state.lastActionAt || new Date().toISOString()
+    });
+
+    applyLocalState(optimisticState);
+    if (isTutorialMode) return optimisticState;
+
+    const stateForSave = normalizeGameState({ ...state, stateVersion: baseVersion });
+    pendingSaveCountRef.current += 1;
+
+    const saveTask = async () => {
+      return await updateRoomState(currentCode, stateForSave, {
+        expectedVersion: baseVersion,
+        baseState,
+        retryMergedConflict: options.retryMergedConflict ?? true
+      });
+    };
+
+    const queuedSave = saveChainRef.current.then(saveTask, saveTask);
+    saveChainRef.current = queuedSave.catch(error => {
+      console.warn('Queued save failed.', error);
+      return null;
+    });
+
+    try {
+      const savedState = await queuedSave;
+      const current = gameStateRef.current;
+      if (!current || getStateVersion(savedState) >= getStateVersion(current)) {
+        return applyLocalState(savedState);
+      }
+      return current;
+    } finally {
+      pendingSaveCountRef.current = Math.max(0, pendingSaveCountRef.current - 1);
+    }
   };
 
   // Read URL query parameter for sharing link on load
@@ -137,19 +225,29 @@ export const App: React.FC = () => {
       roomUnsubRef.current = null;
     }
 
-    const applyIncomingState = (newState: GameState) => {
-      setGameState(newState);
-      refreshSelectionsFromState(newState);
+    const applyIncomingState = (incomingState: GameState) => {
+      const newState = normalizeGameState(incomingState);
+      const current = gameStateRef.current;
+      if (current) {
+        // While this client has an optimistic action saving, do not let realtime echoes
+        // or another player's slightly newer save visually roll the screen backward.
+        // The save path will merge our delta onto the latest database state, then apply that result.
+        if (pendingSaveCountRef.current > 0) return;
+        const incomingVersion = getStateVersion(newState);
+        const currentVersion = getStateVersion(current);
+        if (incomingVersion < currentVersion) return;
+      }
+      applyLocalState(newState);
       const winner = checkWinCondition(newState);
-      if (winner && newState.status !== 'completed') {
+      if (winner && newState.status !== 'completed' && isAuthoritativeHost(newState, playerId)) {
         const winState: GameState = {
           ...newState,
           status: 'completed',
           winnerId: winner.id,
           actionLog: [...newState.actionLog, `VICTORY! Commander ${winner.name} dominates the sector.`]
         };
-        setGameState(winState);
-        updateRoomState(cleanCode, winState);
+        applyLocalState(winState);
+        void updateRoomState(cleanCode, winState).then(applyLocalState).catch(console.warn);
         audio.playVictory();
       }
     };
@@ -222,32 +320,48 @@ export const App: React.FC = () => {
 
   // Combat is no longer forced open for spectators. Players see combat only when they click the planet.
 
-  // Real-time action processor: orders complete and all empires receive timed income automatically.
+  // Real-time action processor. The host handles normal ticks, but other players
+  // can rescue overdue 0s actions if the host tab is closed, throttled, or has a bad clock.
   useEffect(() => {
     if (!gameState || gameState.status !== 'playing' || realtimeTickRef.current) return;
 
     const tick = async () => {
-      if (realtimeTickRef.current || !gameState) return;
-      const actionResult = processRealtimeActions(gameState);
-      const incomeResult = processRealtimeIncome(actionResult.state);
+      const current = gameStateRef.current;
+      if (realtimeTickRef.current || !current || current.status !== 'playing') return;
+
+      const nowMs = Date.now();
+      const isHostTick = isTutorialMode || isAuthoritativeHost(current, myPlayerId);
+      const actionOverdueMs = getMostOverdueRealtimeActionMs(current, nowMs);
+      const incomeOverdueMs = getRealtimeIncomeOverdueMs(current, nowMs);
+      const shouldRescueActions = !isHostTick && actionOverdueMs > ACTION_FAILOVER_GRACE_MS;
+      const shouldRescueIncome = !isHostTick && incomeOverdueMs > INCOME_FAILOVER_GRACE_MS;
+
+      if (!isHostTick && !shouldRescueActions && !shouldRescueIncome) return;
+
+      const actionResult = (isHostTick || shouldRescueActions)
+        ? processRealtimeActions(current, nowMs)
+        : { state: current, changed: false, completed: [] };
+      const incomeResult = (isHostTick || shouldRescueIncome)
+        ? processRealtimeIncome(actionResult.state, nowMs)
+        : { state: actionResult.state, changed: false };
       const nextState = incomeResult.state;
       if (!actionResult.changed && !incomeResult.changed) return;
+
       realtimeTickRef.current = true;
       try {
-        setGameState(nextState);
-        refreshSelectionsFromState(nextState);
-        if (!isTutorialMode) {
-          await updateRoomState(currentCode, nextState);
-        }
+        // Automatic timer results must use strict version saves. If two clients try to
+        // finish the same 0s action, only the first save wins; the loser discards its
+        // generated changes instead of merging duplicate ships/damage/resources.
+        await persistGameState(nextState, { retryMergedConflict: false });
       } finally {
         realtimeTickRef.current = false;
       }
     };
 
-    const interval = window.setInterval(tick, 250);
+    const interval = window.setInterval(tick, 40);
     void tick();
     return () => window.clearInterval(interval);
-  }, [gameState, currentCode, isTutorialMode]);
+  }, [gameState?.roomId, gameState?.status, gameState?.creatorId, currentCode, myPlayerId, isTutorialMode]);
 
 
   useEffect(() => {
@@ -357,11 +471,7 @@ export const App: React.FC = () => {
     setSelectedShip(null);
     setSelectedFleetMove(null);
     setReachableNodes({});
-    setGameState(updatedState);
-    refreshSelectionsFromState(updatedState);
-    if (!isTutorialMode) {
-      await updateRoomState(currentCode, updatedState);
-    }
+    await persistGameState(updatedState);
   };
 
   // Phase & Turn advancement
@@ -433,11 +543,7 @@ export const App: React.FC = () => {
     };
 
     setSelectedShip(null);
-    setGameState(updatedState);
-    refreshSelectionsFromState(updatedState);
-    if (!isTutorialMode) {
-      await updateRoomState(currentCode, updatedState);
-    }
+    await persistGameState(updatedState);
   };
 
   const handlePlayAgain = async () => {
@@ -456,10 +562,7 @@ export const App: React.FC = () => {
       pendingActions: []
     };
     setSelectedNode(null); setSelectedShip(null);
-    setGameState(updatedState);
-    if (!isTutorialMode) {
-      await updateRoomState(currentCode, updatedState);
-    }
+    await persistGameState(updatedState);
   };
 
   const handleReturnToLobby = async () => {
@@ -474,16 +577,14 @@ export const App: React.FC = () => {
       pendingActions: []
     };
     setSelectedNode(null); setSelectedShip(null);
-    setGameState(updatedState);
-    if (!isTutorialMode) {
-      await updateRoomState(currentCode, updatedState);
-    }
+    await persistGameState(updatedState);
   };
 
   const handleReturnToMainLobby = () => {
     audio.playBeep();
     setView('lobby'); setGameState(null); setCurrentCode('');
     setSelectedNode(null); setSelectedShip(null);
+    setTutorialIntroOpen(false);
   };
 
   const handleUpdateGameState = async (updatedState: GameState) => {
@@ -493,11 +594,35 @@ export const App: React.FC = () => {
       lastUpdated: new Date().toISOString(),
       lastActionAt: updatedState.lastActionAt || new Date().toISOString()
     };
-    setGameState(stamped);
-    refreshSelectionsFromState(stamped);
-    if (!isTutorialMode) {
-      await updateRoomState(currentCode, stamped);
-    }
+    await persistGameState(stamped);
+  };
+
+  const handleAllianceNotificationResponse = async (allianceId: string, accepted: boolean) => {
+    if (!gameState || !myPlayerId) return;
+    const alliance = (gameState.alliances || []).find(a => a.id === allianceId);
+    if (!alliance || alliance.status !== 'requested' || alliance.requestedBy === myPlayerId || !alliance.playerIds.includes(myPlayerId)) return;
+
+    const requester = gameState.players.find(p => p.id === alliance.requestedBy);
+    const responder = gameState.players.find(p => p.id === myPlayerId);
+    const timestamp = new Date().toISOString();
+    const nextAlliances = accepted
+      ? (gameState.alliances || []).map(a => a.id === alliance.id ? { ...a, status: 'active' as const, requestedBy: undefined } : a)
+      : (gameState.alliances || []).filter(a => a.id !== alliance.id);
+
+    audio.playBeep(accepted ? 780 : 220, 0.08);
+    await handleUpdateGameState({
+      ...gameState,
+      alliances: nextAlliances,
+      actionLog: [
+        ...gameState.actionLog,
+        accepted
+          ? `${responder?.name || 'Commander'} accepted ${requester?.name || 'another empire'}'s alliance request.`
+          : `${responder?.name || 'Commander'} declined ${requester?.name || 'another empire'}'s alliance request.`
+      ],
+      lastAction: accepted ? 'alliance_accepted' : 'alliance_declined',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    });
   };
 
   const handleStartTutorialScenario = (scenarioId: TutorialScenarioId) => {
@@ -509,6 +634,7 @@ export const App: React.FC = () => {
     setSelectedNode(scenarioState.nodes[0] || null);
     setSelectedShip(null);
     setReachableNodes({});
+    setTutorialIntroOpen(true);
     setView('tutorialGame');
   };
 
@@ -529,6 +655,11 @@ export const App: React.FC = () => {
   const isMyActiveTurn = true;
   const realTimeMode = true;
   const me = gameState.players.find(p => p.id === myPlayerId);
+  const pendingAllianceRequests = (gameState.alliances || []).filter(alliance =>
+    alliance.status === 'requested' &&
+    alliance.requestedBy !== myPlayerId &&
+    alliance.playerIds.includes(myPlayerId)
+  );
 
   const phaseNames = ['BUILD', 'MOVEMENT', 'ACTION'];
   const phaseColors: Record<number, string> = {
@@ -537,7 +668,7 @@ export const App: React.FC = () => {
     2: 'text-rose-300 bg-rose-900/30 border-rose-500/50'
   };
   const playerColorMap: Record<string, string> = {
-    green: '#10b981', blue: '#3b82f6', purple: '#8b5cf6', yellow: '#f59e0b'
+    green: '#10b981', blue: '#3b82f6', purple: '#8b5cf6', yellow: '#f59e0b', red: '#ef4444', cyan: '#06b6d4', orange: '#f97316', pink: '#ec4899'
   };
 
   return (
@@ -587,13 +718,13 @@ export const App: React.FC = () => {
             {/* CENTER: Stellaris resource bar */}
             <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-slate-700/50">
               {/* Credits (Energy Credits) */}
-              <div className="relative flex items-center gap-2 shrink-0" title={`Gross/tick: +${economy.revenuePerIncomeTick}R | Upkeep/tick: -${economy.upkeepPerIncomeTick}R (Ships -${economy.shipUpkeep}, Armies -${economy.armyUpkeep}) | Net/tick: +${economy.netPerIncomeTick}R`}>
+              <div className="relative flex items-center gap-2 shrink-0" title={`Gross/tick: +${formatWholeResource(economy.revenuePerIncomeTick)}R | Upkeep/tick: -${formatWholeResource(economy.upkeepPerIncomeTick)}R (Ships -${formatWholeResource(economy.shipUpkeep)}, Armies -${formatWholeResource(economy.armyUpkeep)}) | Net/tick: +${formatWholeResource(economy.netPerIncomeTick)}R`}>
                 <CreditsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Credits</span>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-sm font-bold text-amber-400 font-mono leading-none">{Number(me?.resources ?? 0).toFixed(1)}R</span>
-                    <span className="text-[10px] text-emerald-400 font-bold font-mono leading-none">+{myYield}/tick</span>
+                    <span className="text-sm font-bold text-amber-400 font-mono leading-none">{formatWholeResource(me?.resources)}R</span>
+                    <span className="text-[10px] text-emerald-400 font-bold font-mono leading-none">+{formatWholeResource(myYield)}/tick</span>
                   </div>
                 </div>
                 <div className="pointer-events-none absolute -right-2 -top-4 flex flex-col items-end gap-0.5">
@@ -603,7 +734,7 @@ export const App: React.FC = () => {
                       className="animate-bounce rounded border border-emerald-400/50 bg-emerald-950/80 px-1.5 py-0.5 text-[10px] font-black text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.35)]"
                       style={{ transform: `translateY(${-idx * 10}px)` }}
                     >
-                      +{pop.amount}R
+                      +{formatWholeResource(pop.amount)}R
                     </span>
                   ))}
                 </div>
@@ -686,8 +817,13 @@ export const App: React.FC = () => {
               <SoundToggle />
               <button
                 onClick={() => setIsDiplomacyOpen(true)}
-                className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all flex items-center gap-1"
-              ><Handshake className="h-3 w-3" /> DIP</button>
+                className="group relative overflow-hidden px-2.5 sm:px-3 py-1.5 text-[9px] sm:text-[10px] font-mono font-extrabold uppercase tracking-[0.12em] text-cyan-200 border border-cyan-500/40 rounded-md bg-cyan-950/20 hover:text-white hover:border-cyan-300 hover:bg-cyan-900/35 hover:shadow-[0_0_14px_rgba(34,211,238,0.25)] transition-all flex items-center gap-1.5"
+                title="Open diplomacy"
+              >
+                <span className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent opacity-70" />
+                <Handshake className="h-3.5 w-3.5 text-cyan-300 group-hover:text-white" />
+                <span>Diplomacy</span>
+              </button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 border border-slate-700 rounded hover:text-white hover:border-slate-500 transition-all"
@@ -711,19 +847,77 @@ export const App: React.FC = () => {
         />
 
         {isTutorialMode && gameState.tutorialScenario && (
-          <div className="absolute top-0 left-0 right-0 z-20 bg-cyan-950/90 backdrop-blur-sm border-b border-cyan-500/40 px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 animate-fadeIn">
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-300">Tutorial Scenario</div>
-              <div className="text-sm font-bold text-slate-100">{gameState.tutorialScenario.title}</div>
-              <div className="text-xs text-slate-300">{gameState.tutorialScenario.objective}</div>
+          <>
+            <div className="absolute top-0 left-0 right-0 z-20 bg-cyan-950/90 backdrop-blur-sm border-b border-cyan-500/40 px-4 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 animate-fadeIn">
+              <div>
+                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-300">Tutorial Scenario</div>
+                <div className="text-sm font-bold text-slate-100">{gameState.tutorialScenario.title}</div>
+                <div className="text-xs text-slate-300 line-clamp-2">{gameState.tutorialScenario.objective}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setTutorialIntroOpen(true)}
+                  className="scifi-btn scifi-btn-secondary px-3 py-2 text-xs shrink-0"
+                >
+                  Show Briefing
+                </button>
+                <button
+                  onClick={handleReturnToMainLobby}
+                  className="scifi-btn scifi-btn-danger px-3 py-2 text-xs shrink-0"
+                >
+                  Exit Tutorial
+                </button>
+              </div>
             </div>
-            <button
-              onClick={handleReturnToMainLobby}
-              className="scifi-btn scifi-btn-danger px-3 py-2 text-xs shrink-0"
-            >
-              Exit Tutorial
-            </button>
-          </div>
+
+            {tutorialIntroOpen && (
+              <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/78 backdrop-blur-sm p-4 animate-fadeIn">
+                <div className="glass-panel w-full max-w-2xl max-h-[82vh] overflow-y-auto rounded-xl border border-cyan-500/40 p-5 shadow-[0_0_32px_rgba(34,211,238,0.18)]">
+                  <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-3 mb-4">
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-cyan-300">Mission Briefing</p>
+                      <h3 className="text-xl font-extrabold uppercase tracking-wide text-slate-100">{gameState.tutorialScenario.title}</h3>
+                    </div>
+                    <button
+                      onClick={() => setTutorialIntroOpen(false)}
+                      className="scifi-btn px-3 py-2 text-xs"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {gameState.tutorialScenario.intro && (
+                      <div className="rounded border border-cyan-500/25 bg-cyan-950/20 p-3">
+                        <p className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 mb-1">What this teaches</p>
+                        <p className="text-sm text-slate-300 leading-relaxed">{gameState.tutorialScenario.intro}</p>
+                      </div>
+                    )}
+                    <div className="rounded border border-indigo-500/25 bg-indigo-950/20 p-3">
+                      <p className="text-[10px] font-mono uppercase tracking-widest text-indigo-300 mb-1">Objective</p>
+                      <p className="text-sm text-slate-200 leading-relaxed">{gameState.tutorialScenario.objective}</p>
+                    </div>
+                    <div className="rounded border border-slate-700 bg-slate-950/70 p-3">
+                      <p className="text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-3">Steps</p>
+                      <ol className="space-y-2">
+                        {gameState.tutorialScenario.steps.map((step, index) => (
+                          <li key={`${gameState.tutorialScenario?.id || 'tutorial'}-${index}`} className="flex gap-3 text-sm text-slate-300 leading-relaxed">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-cyan-500/40 bg-cyan-950/40 text-[11px] font-bold text-cyan-300">{index + 1}</span>
+                            <span>{step}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row justify-end gap-2 mt-5 pt-4 border-t border-slate-800">
+                    <button onClick={handleReturnToMainLobby} className="scifi-btn scifi-btn-danger px-4 py-2 text-xs">Exit Tutorial</button>
+                    <button onClick={() => setTutorialIntroOpen(false)} className="scifi-btn scifi-btn-primary px-4 py-2 text-xs">Start Training</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* In-Game log console (top-left corner, desktop only) */}
@@ -753,6 +947,45 @@ export const App: React.FC = () => {
 
       {/* ═══ 3. FLOATERS ═══ */}
       <ChatPanel code={currentCode} gameState={gameState} myPlayerId={myPlayerId} />
+
+      {pendingAllianceRequests.length > 0 && (
+        <div className="fixed left-1/2 top-16 z-[55] w-[min(92vw,420px)] -translate-x-1/2 space-y-2 pointer-events-auto">
+          {pendingAllianceRequests.map(alliance => {
+            const requester = gameState.players.find(p => p.id === alliance.requestedBy);
+            return (
+              <div key={alliance.id} className="relative overflow-hidden rounded-xl border border-cyan-400/50 bg-slate-950/95 p-4 shadow-[0_0_30px_rgba(34,211,238,0.24)] backdrop-blur-md animate-fadeIn">
+                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300 to-transparent" />
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-500/40 bg-cyan-950/30 text-cyan-300">
+                    <Handshake className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-cyan-300">Diplomacy Request</div>
+                    <div className="mt-1 text-sm font-bold text-white">
+                      {requester?.name || 'Another commander'} wants an alliance.
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">Accept to make FTL inhibitors friendly and block combat between both empires.</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleAllianceNotificationResponse(alliance.id, false)}
+                        className="min-h-[42px] rounded-md border border-rose-500/50 bg-rose-950/30 px-3 py-2 text-xs font-black uppercase tracking-wider text-rose-200 hover:bg-rose-900/45 hover:text-white"
+                      >
+                        Decline
+                      </button>
+                      <button
+                        onClick={() => handleAllianceNotificationResponse(alliance.id, true)}
+                        className="min-h-[42px] rounded-md border border-emerald-400/60 bg-emerald-950/40 px-3 py-2 text-xs font-black uppercase tracking-wider text-emerald-200 hover:bg-emerald-900/50 hover:text-white"
+                      >
+                        Accept
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ═══ 4. NEXT PHASE BUTTON (fixed bottom-right when it's my turn) ═══ */}
       {!realTimeMode && isMyActiveTurn && gameState.status === 'playing' && (

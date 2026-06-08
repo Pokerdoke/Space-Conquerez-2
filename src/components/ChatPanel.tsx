@@ -42,7 +42,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ code, gameState, myPlayerI
     green: 'text-emerald-400',
     blue: 'text-blue-400',
     purple: 'text-violet-400',
-    yellow: 'text-amber-400'
+    yellow: 'text-amber-400',
+    red: 'text-red-400',
+    cyan: 'text-cyan-400',
+    orange: 'text-orange-400',
+    pink: 'text-pink-400'
   };
 
   return (

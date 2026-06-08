@@ -61,7 +61,11 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
       green: 'text-emerald-400',
       blue: 'text-blue-400',
       purple: 'text-violet-400',
-      yellow: 'text-amber-400'
+      yellow: 'text-amber-400',
+      red: 'text-red-400',
+      cyan: 'text-cyan-400',
+      orange: 'text-orange-400',
+      pink: 'text-pink-400'
     };
     return mappings[color];
   };
@@ -70,7 +74,7 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
 
   return (
     <div className={`fixed top-[56px] right-0 bottom-0 z-30 transition-all duration-300 ease-in-out bg-slate-900/95 border-l border-slate-800 backdrop-blur-md shadow-[-8px_0_30px_rgba(0,0,0,0.45)] glass-panel ${
-      isExpanded ? 'w-full sm:w-[380px]' : 'w-[56px]'
+      isExpanded ? 'w-full sm:w-[400px]' : 'w-[56px]'
     }`}>
       
       {/* 1. Header Collapse Handle */}
@@ -133,46 +137,46 @@ export const NodeDetails: React.FC<NodeDetailsProps> = ({
         <div className="px-4 mt-3 space-y-3 h-[calc(100%-92px)] flex flex-col min-h-0">
           
           {/* Tabs Bar */}
-          <div className="grid grid-cols-3 gap-2 border-b border-slate-800/60 pb-2">
+          <div className="grid grid-cols-3 gap-1.5 border-b border-slate-800/60 pb-2">
             <button
               onClick={() => { audio.playBeep(); setActiveTab('fleet'); }}
-              className={`flex items-center justify-center py-2 text-xs font-bold uppercase tracking-wider border rounded transition-all ${
+              className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 px-1.5 py-2 text-[8px] sm:text-[10px] font-bold uppercase tracking-[0.08em] sm:tracking-wider leading-none border rounded transition-all ${
                 activeTab === 'fleet'
                   ? 'border-blue-500 bg-blue-950/20 text-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.15)]'
                   : 'border-slate-800 bg-slate-950/30 text-slate-400 hover:border-slate-700'
               }`}
             >
-              <Orbit className="h-3.5 w-3.5 mr-1.5" />
-              <span>Orbit Fleets</span>
+              <Orbit className="h-3.5 w-3.5 shrink-0" />
+              <span className="block text-center leading-tight whitespace-normal break-words">Orbital Fleet</span>
             </button>
 
             <button
               onClick={() => { audio.playBeep(); setActiveTab('build'); }}
-              className={`flex items-center justify-center py-2 text-xs font-bold uppercase tracking-wider border rounded transition-all ${
+              className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 px-1.5 py-2 text-[8px] sm:text-[10px] font-bold uppercase tracking-[0.08em] sm:tracking-wider leading-none border rounded transition-all ${
                 activeTab === 'build'
                   ? 'border-indigo-500 bg-indigo-950/20 text-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.15)]'
                   : 'border-slate-800 bg-slate-950/30 text-slate-400 hover:border-slate-700'
               }`}
             >
-              <Hammer className="h-3.5 w-3.5 mr-1.5" />
-              <span>Infrastructure</span>
+              <Hammer className="h-3.5 w-3.5 shrink-0" />
+              <span className="block text-center leading-tight whitespace-normal break-words">Infrastructure</span>
             </button>
 
             <button
               onClick={() => { audio.playBeep(); setActiveTab('combat'); }}
-              className={`flex items-center justify-center py-2 text-xs font-bold uppercase tracking-wider border rounded transition-all ${
+              className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 px-1.5 py-2 text-[8px] sm:text-[10px] font-bold uppercase tracking-[0.08em] sm:tracking-wider leading-none border rounded transition-all ${
                 activeTab === 'combat'
                   ? 'border-rose-500 bg-rose-950/20 text-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.15)]'
                   : 'border-slate-800 bg-slate-950/30 text-slate-400 hover:border-slate-700'
               }`}
             >
-              <Swords className="h-3.5 w-3.5 mr-1.5" />
-              <span>Combat Area</span>
+              <Swords className="h-3.5 w-3.5 shrink-0" />
+              <span className="block text-center leading-tight whitespace-normal break-words">Combat Area</span>
             </button>
           </div>
 
           {/* Active Tab Component */}
-          <div className="mt-2 flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 pb-28">
+          <div className="mt-2 flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 pb-6">
             {activeTab === 'build' && (
               <BuildPanel
                 node={currentNode}

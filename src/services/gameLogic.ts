@@ -11,6 +11,11 @@ const STAR_NAMES = [
   'Vega Prime', 'Rigel Secundus', 'Betelgeuse III', 'Sirius Minor', 'Proxima Prime'
 ];
 
+function clearNpcPlanetLabel(node: StarNode) {
+  node.name = node.name.replace(/\s*\(NPC\)\s*$/i, '');
+  node.isNpcPlanet = false;
+}
+
 // Ship templates
 export const SHIP_STATS = {
   Destroyer: { cost: 10, hp: 14, dmgMin: 2, dmgMax: 6, blocksMovement: true },
@@ -221,7 +226,8 @@ export const REALTIME_ACTION_SECONDS = {
   deconstruct: 10,
   colonize: 20,
   scrap: 10,
-  combatRound: 1.5
+  combatRound: 2.5,
+  bombardCooldown: 10
 };
 
 export function clampRealtimeSeconds(seconds: number): number {
@@ -247,6 +253,7 @@ export function getBuildDurationSeconds(action: PendingRealtimeAction['type'], d
   if (action === 'build_ground') return REALTIME_ACTION_SECONDS.buildGround;
   if (action === 'colonize') return REALTIME_ACTION_SECONDS.colonize;
   if (action === 'scrap_ship') return REALTIME_ACTION_SECONDS.scrap;
+  if (action === 'auto_space_combat' || action === 'auto_ground_combat' || action === 'auto_invasion') return REALTIME_ACTION_SECONDS.combatRound;
   return 12;
 }
 
@@ -269,6 +276,16 @@ function pushRealtimeLog(logs: string[], message: string) {
   logs.push(`[REAL TIME] ${message}`);
 }
 
+type AutoCombatTickResult = {
+  state: GameState;
+  report: string[];
+  changed: boolean;
+  shouldContinue: boolean;
+  nextDelaySeconds?: number;
+  nodeId: string;
+  playerId: string;
+};
+
 export function processRealtimeActions(state: GameState, nowMs = Date.now()): { state: GameState; changed: boolean; completed: PendingRealtimeAction[] } {
   const pending = state.pendingActions || [];
   if (pending.length === 0) return { state, changed: false, completed: [] };
@@ -283,9 +300,37 @@ export function processRealtimeActions(state: GameState, nowMs = Date.now()): { 
   }));
   let players = state.players.map(player => ({ ...player }));
   const actionLog = [...state.actionLog];
+  const followupActions: PendingRealtimeAction[] = [];
+  let activeCombatNodeId = state.activeCombatNodeId ?? null;
+  let activeCombatUpdatedAt = state.activeCombatUpdatedAt;
+  let activeCombatSummary = state.activeCombatSummary;
+  let lastAction = 'realtime_actions_completed';
 
   const nodeById = (id: string) => nodes.find(node => node.id === id);
   const playerName = (id: string) => players.find(p => p.id === id)?.name || 'Commander';
+  const applyCombatState = (result: AutoCombatTickResult, followupType: PendingRealtimeAction['type'], followupLabel: string) => {
+    if (!result.changed) return;
+    nodes = result.state.nodes.map(node => ({
+      ...node,
+      ships: node.ships.map(ship => ({ ...ship, carriedUnits: ship.carriedUnits.map(u => ({ ...u })), carriedFighters: ship.carriedFighters.map(f => ({ ...f })) })),
+      groundUnits: node.groundUnits.map(unit => ({ ...unit }))
+    }));
+    players = result.state.players.map(player => ({ ...player }));
+    actionLog.splice(0, actionLog.length, ...result.state.actionLog);
+    activeCombatNodeId = result.state.activeCombatNodeId ?? null;
+    activeCombatUpdatedAt = result.state.activeCombatUpdatedAt;
+    activeCombatSummary = result.state.activeCombatSummary;
+    lastAction = result.state.lastAction || lastAction;
+    if (result.shouldContinue) {
+      followupActions.push(createPendingAction({
+        type: followupType,
+        playerId: result.playerId,
+        nodeId: result.nodeId,
+        durationSeconds: result.nextDelaySeconds ?? REALTIME_ACTION_SECONDS.combatRound,
+        label: followupLabel
+      }, nowMs));
+    }
+  };
 
   for (const action of due) {
     const node = nodeById(action.nodeId);
@@ -356,7 +401,7 @@ export function processRealtimeActions(state: GameState, nowMs = Date.now()): { 
         node.claimedBy = action.playerId;
         node.development = 'colony';
         node.resourceGeneration = 2;
-        node.isNpcPlanet = false;
+        clearNpcPlanetLabel(node);
         pushRealtimeLog(actionLog, `${playerName(action.playerId)} finished colonizing ${node.name}.`);
         break;
       }
@@ -370,6 +415,26 @@ export function processRealtimeActions(state: GameState, nowMs = Date.now()): { 
         pushRealtimeLog(actionLog, `${playerName(action.playerId)} finished scrapping ${ship.type} at ${node.name} (+${refund}R).`);
         break;
       }
+      case 'auto_space_combat': {
+        const result = resolveAutoSpaceBattleRound({ ...state, players, nodes, actionLog }, action.nodeId, action.playerId);
+        applyCombatState(result, 'auto_space_combat', `Auto space combat at ${node.name}`);
+        break;
+      }
+      case 'auto_ground_combat': {
+        const result = resolveAutoGroundCombatRound({ ...state, players, nodes, actionLog }, action.nodeId, action.playerId, false);
+        applyCombatState(result, 'auto_ground_combat', `Auto ground combat at ${node.name}`);
+        break;
+      }
+      case 'auto_invasion': {
+        const result = resolveAutoGroundCombatRound({ ...state, players, nodes, actionLog }, action.nodeId, action.playerId, true);
+        applyCombatState(result, 'auto_invasion', `Auto invasion at ${node.name}`);
+        break;
+      }
+      case 'auto_orbital_bombardment': {
+        const result = resolveAutoOrbitalBombardmentRound({ ...state, players, nodes, actionLog }, action.nodeId, action.playerId);
+        applyCombatState(result, 'auto_orbital_bombardment', `Auto orbital bombardment at ${node.name}`);
+        break;
+      }
       default:
         break;
     }
@@ -381,11 +446,14 @@ export function processRealtimeActions(state: GameState, nowMs = Date.now()): { 
       ...state,
       players,
       nodes,
-      pendingActions: pending.filter(action => !dueIds.has(action.id)),
-      actionLog,
-      lastAction: 'realtime_actions_completed',
+      pendingActions: [...pending.filter(action => !dueIds.has(action.id)), ...followupActions],
+      actionLog: actionLog.slice(-100),
+      lastAction,
       lastActionAt: new Date(nowMs).toISOString(),
-      lastUpdated: new Date(nowMs).toISOString()
+      lastUpdated: new Date(nowMs).toISOString(),
+      activeCombatNodeId,
+      activeCombatUpdatedAt,
+      activeCombatSummary
     },
     changed: true,
     completed: due
@@ -1051,11 +1119,20 @@ export function getReachableNodes(
 // Friendly territory without a shipyard repairs more slowly: heavy damage usually takes 3 turns,
 // while lighter damage often takes 2 turns.
 // Ground troops carried inside carriers heal too while the carrier is parked in friendly territory.
-export function processHealing(nodes: StarNode[], activePlayerId: string): string[] {
+export function processHealing(nodes: StarNode[], activePlayerId: string, alliances: GameState['alliances'] = []): string[] {
   const log: string[] = [];
 
   for (const node of nodes) {
     const isFriendly = node.claimedBy === activePlayerId;
+    const hasHostileShipsInOrbit = node.ships.some(ship =>
+      ship.hp > 0 &&
+      isHostileOwner({ alliances }, activePlayerId, ship.owner) &&
+      (ship.dmgMax > 0 || ship.blocksMovement || ship.type === 'Carrier')
+    );
+    const hasHostileGroundOnSurface = node.groundUnits.some(unit =>
+      unit.hp > 0 && isHostileOwner({ alliances }, activePlayerId, unit.owner)
+    );
+
     if (!isFriendly) {
       // Clear territory counters for this player's units in enemy/neutral nodes.
       for (const ship of node.ships) {
@@ -1071,9 +1148,16 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
       continue;
     }
 
-    // Process friendly ships.
+    // Process friendly ships. Ships cannot repair while hostile ships are still in orbit.
     for (const ship of node.ships) {
       if (ship.owner !== activePlayerId) continue;
+
+      if (hasHostileShipsInOrbit) {
+        ship.turnsInTerritory = 0;
+        for (const fighter of ship.carriedFighters) fighter.turnsInTerritory = 0;
+        for (const carried of ship.carriedUnits) carried.turnsInTerritory = 0;
+        continue;
+      }
 
       const shipHealed = healUnitOneTurn(ship, node.hasShipyard);
       if (shipHealed > 0) {
@@ -1111,9 +1195,13 @@ export function processHealing(nodes: StarNode[], activePlayerId: string): strin
       }
     }
 
-    // Process friendly ground units on the planet surface.
+    // Process friendly ground units on the planet surface. Ground units do not heal while actively fighting.
     for (const gu of node.groundUnits) {
       if (gu.owner !== activePlayerId) continue;
+      if (hasHostileGroundOnSurface) {
+        gu.turnsInTerritory = 0;
+        continue;
+      }
       const healed = healUnitOneTurn(gu, node.hasShipyard);
       if (healed > 0) {
         log.push(
@@ -1219,8 +1307,16 @@ export interface OrbitalBombardmentResult {
   damage: number;
 }
 
-export function canBattleshipBombard(node: StarNode, battleship: Ship, playerId: string, state: Pick<GameState, 'alliances'>): boolean {
-  if (battleship.owner !== playerId || battleship.type !== 'BattleShip' || battleship.hp <= 0) return false;
+export function getBombardmentCooldownRemaining(ship: Ship, nowMs = Date.now()): number {
+  if (!ship.lastBombardedAt) return 0;
+  const elapsed = (nowMs - new Date(ship.lastBombardedAt).getTime()) / 1000;
+  return Math.max(0, Math.ceil(REALTIME_ACTION_SECONDS.bombardCooldown - elapsed));
+}
+
+export function canBattleshipBombard(node: StarNode, ship: Ship, playerId: string, state: Pick<GameState, 'alliances'>): boolean {
+  // Kept the old function name for compatibility, but all attack-capable ships can now bombard.
+  if (ship.owner !== playerId || ship.hp <= 0 || ship.dmgMax <= 0 || ship.type === 'ColonyShip') return false;
+  if (getBombardmentCooldownRemaining(ship) > 0) return false;
   const isHostilePlanet =
     node.isNpcPlanet ||
     (node.isDysonSphere && (node.claimedBy === null || isHostileOwner(state, playerId, node.claimedBy))) ||
@@ -1262,6 +1358,7 @@ export function resolveOrbitalBombardment(
   target.turnsInTerritory = 0;
   battleship.turnsInTerritory = 0;
   battleship.bombardedThisTurn = true;
+  battleship.lastBombardedAt = currentTimestamp();
 
   const destroyed = target.hp <= 0;
   if (destroyed) {
@@ -1273,11 +1370,11 @@ export function resolveOrbitalBombardment(
     ? 'Neutral Guardians'
     : cloned.players.find(p => p.id === target.owner)?.name || 'Enemy';
   const report = [
-    `[ORBITAL BOMBARDMENT] ${node.name}: ${attackerName}'s BattleShip bombarded ${defenderName} ground troops for ${damage} damage.`,
+    `[ORBITAL BOMBARDMENT] ${node.name}: ${attackerName}'s ${battleship.type} bombarded ${defenderName} ground troops for ${damage} damage.`,
     destroyed
       ? `- DESTROYED: Defender ground unit was vaporized from orbit.`
       : `- Defender ground unit HP remaining: ${target.hp}/${target.maxHp}`,
-    `- BattleShip systems cycling for the next timed action.`
+    `- ${battleship.type} bombardment cooldown: ${REALTIME_ACTION_SECONDS.bombardCooldown}s.`
   ];
 
   return {
@@ -1542,7 +1639,7 @@ export function invadePlanetWithCarriers(
 
   if (defenderCountBeforeDeploy === 0) {
     node.claimedBy = playerId;
-    node.isNpcPlanet = false;
+    clearNpcPlanetLabel(node);
     captured = true;
     report.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
   } else {
@@ -1630,7 +1727,7 @@ export function resolveGroundCombatRound(
 
   if (captured) {
     node.claimedBy = playerId;
-    node.isNpcPlanet = false;
+    clearNpcPlanetLabel(node);
     report.push(`Planet captured! ${node.name} is now controlled by ${player.name}.`);
   } else if (failed) {
     report.push(`Invasion failed. ${node.name} remains under its current control.`);
@@ -1685,6 +1782,406 @@ function getAutoDefenderOptions(state: Pick<GameState, 'alliances'>, node: StarN
   return node.ships
     .filter(s => isHostileOwner(state, playerId, s.owner) && s.hp > 0)
     .sort((a, b) => getShipPriorityValue(b) - getShipPriorityValue(a));
+}
+
+export function hasQueuedAutoAction(state: GameState, nodeId: string, playerId: string, type: PendingRealtimeAction['type']): boolean {
+  return (state.pendingActions || []).some(action => action.type === type && action.nodeId === nodeId && action.playerId === playerId);
+}
+
+function cancelAutoCombatAction(state: GameState, nodeId: string, playerId: string, type: PendingRealtimeAction['type'], logLine: string): GameState {
+  const pendingBefore = state.pendingActions || [];
+  const pendingActions = pendingBefore.filter(action => !(action.type === type && action.nodeId === nodeId && action.playerId === playerId));
+  if (pendingActions.length === pendingBefore.length) return state;
+  const timestamp = currentTimestamp();
+  const hasRemainingAutoCombatAtNode = pendingActions.some(action =>
+    action.nodeId === nodeId &&
+    (action.type === 'auto_space_combat' || action.type === 'auto_ground_combat' || action.type === 'auto_invasion' || action.type === 'auto_orbital_bombardment')
+  );
+
+  return {
+    ...state,
+    pendingActions,
+    activeCombatNodeId: hasRemainingAutoCombatAtNode ? state.activeCombatNodeId : null,
+    activeCombatUpdatedAt: timestamp,
+    activeCombatSummary: hasRemainingAutoCombatAtNode ? state.activeCombatSummary : undefined,
+    actionLog: [...state.actionLog, logLine].slice(-100),
+    lastAction: `stop_${type}`,
+    lastActionAt: timestamp,
+    lastUpdated: timestamp
+  };
+}
+
+function queueAutoCombatAction(state: GameState, nodeId: string, playerId: string, type: PendingRealtimeAction['type'], label: string, logLine: string, durationSeconds = REALTIME_ACTION_SECONDS.combatRound): GameState {
+  if (hasQueuedAutoAction(state, nodeId, playerId, type)) return state;
+  const node = state.nodes.find(n => n.id === nodeId);
+  if (!node) return state;
+  const timestamp = currentTimestamp();
+  const pending = createPendingAction({
+    type,
+    playerId,
+    nodeId,
+    durationSeconds,
+    label
+  });
+  return {
+    ...state,
+    pendingActions: [...(state.pendingActions || []), pending],
+    activeCombatNodeId: nodeId,
+    activeCombatUpdatedAt: timestamp,
+    activeCombatSummary: logLine,
+    actionLog: [...state.actionLog, logLine].slice(-100),
+    lastAction: type,
+    lastActionAt: timestamp,
+    lastUpdated: timestamp
+  };
+}
+
+export function startAutoSpaceBattle(state: GameState, nodeId: string, playerId: string): GameState {
+  const node = state.nodes.find(n => n.id === nodeId);
+  const playerName = state.players.find(p => p.id === playerId)?.name || 'Commander';
+  if (!node) return state;
+  if (hasQueuedAutoAction(state, nodeId, playerId, 'auto_space_combat')) {
+    return cancelAutoCombatAction(state, nodeId, playerId, 'auto_space_combat', `[AUTO SPACE] ${playerName} stopped auto-attack at ${node.name}.`);
+  }
+  const hasAttacker = getAutoAttackOptions(node, playerId).length > 0;
+  const hasDefender = getAutoDefenderOptions(state, node, playerId).length > 0;
+  if (!hasAttacker || !hasDefender) return state;
+  return queueAutoCombatAction(
+    state,
+    nodeId,
+    playerId,
+    'auto_space_combat',
+    `Auto space combat at ${node.name}`,
+    `[AUTO SPACE] ${playerName} ordered timed auto-attack at ${node.name}. Next volley in ${REALTIME_ACTION_SECONDS.combatRound}s.`
+  );
+}
+
+export function startAutoGroundBattle(state: GameState, nodeId: string, playerId: string): GameState {
+  const node = state.nodes.find(n => n.id === nodeId);
+  const playerName = state.players.find(p => p.id === playerId)?.name || 'Commander';
+  if (!node) return state;
+  if (hasQueuedAutoAction(state, nodeId, playerId, 'auto_ground_combat')) {
+    return cancelAutoCombatAction(state, nodeId, playerId, 'auto_ground_combat', `[AUTO GROUND] ${playerName} stopped auto ground combat at ${node.name}.`);
+  }
+  const enemyShipsInOrbit = node.ships.some(s => s.blocksMovement && isHostileOwner(state, playerId, s.owner));
+  const hasAttacker = node.groundUnits.some(g => g.owner === playerId);
+  const hasDefender = node.groundUnits.some(g => isHostileOwner(state, playerId, g.owner));
+  if (enemyShipsInOrbit || !hasAttacker || !hasDefender) return state;
+  return queueAutoCombatAction(
+    state,
+    nodeId,
+    playerId,
+    'auto_ground_combat',
+    `Auto ground combat at ${node.name}`,
+    `[AUTO GROUND] ${playerName} ordered timed ground assault at ${node.name}. Next clash in ${REALTIME_ACTION_SECONDS.combatRound}s.`
+  );
+}
+
+
+function getAutoBombardShips(node: StarNode, playerId: string): Ship[] {
+  return node.ships
+    .filter(s => s.owner === playerId && s.hp > 0 && s.dmgMax > 0 && s.type !== 'ColonyShip')
+    .sort((a, b) => getShipPriorityValue(b) - getShipPriorityValue(a));
+}
+
+function canAutoBombardNode(state: Pick<GameState, 'alliances'>, node: StarNode, playerId: string): boolean {
+  const isHostilePlanet =
+    node.isNpcPlanet ||
+    (node.isDysonSphere && (node.claimedBy === null || isHostileOwner(state, playerId, node.claimedBy))) ||
+    (node.claimedBy !== null && isHostileOwner(state, playerId, node.claimedBy));
+  if (!isHostilePlanet) return false;
+  if (node.groundUnits.some(g => g.owner === playerId)) return false;
+  const hostileCombatShips = node.ships.some(s =>
+    isHostileOwner(state, playerId, s.owner) &&
+    s.type !== 'ColonyShip' &&
+    (s.blocksMovement || s.type === 'Fighter')
+  );
+  if (hostileCombatShips) return false;
+  return node.groundUnits.some(g => isHostileOwner(state, playerId, g.owner)) && getAutoBombardShips(node, playerId).length > 0;
+}
+
+function getNextBombardDelaySeconds(node: StarNode, playerId: string): number {
+  const cooldowns = getAutoBombardShips(node, playerId).map(ship => getBombardmentCooldownRemaining(ship));
+  if (cooldowns.length === 0) return REALTIME_ACTION_SECONDS.combatRound;
+  if (cooldowns.some(seconds => seconds <= 0)) return REALTIME_ACTION_SECONDS.combatRound;
+  return Math.max(REALTIME_ACTION_SECONDS.combatRound, Math.min(...cooldowns));
+}
+
+export function startAutoOrbitalBombardment(state: GameState, nodeId: string, playerId: string): GameState {
+  const node = state.nodes.find(n => n.id === nodeId);
+  const playerName = state.players.find(p => p.id === playerId)?.name || 'Commander';
+  if (!node) return state;
+  if (hasQueuedAutoAction(state, nodeId, playerId, 'auto_orbital_bombardment')) {
+    return cancelAutoCombatAction(state, nodeId, playerId, 'auto_orbital_bombardment', `[AUTO BOMBARD] ${playerName} stopped automatic orbital bombardment at ${node.name}.`);
+  }
+  if (!canAutoBombardNode(state, node, playerId)) return state;
+  const firstDelay = getNextBombardDelaySeconds(node, playerId);
+  const delayText = `in ${firstDelay.toFixed(firstDelay % 1 === 0 ? 0 : 1)}s`;
+  return queueAutoCombatAction(
+    state,
+    nodeId,
+    playerId,
+    'auto_orbital_bombardment',
+    `Auto orbital bombardment at ${node.name}`,
+    `[AUTO BOMBARD] ${playerName} ordered automatic orbital bombardment at ${node.name}. Ready ships will fire ${delayText}.`,
+    firstDelay
+  );
+}
+
+export function resolveAutoOrbitalBombardmentRound(state: GameState, nodeId: string, playerId: string): AutoCombatTickResult {
+  const next = cloneGameState(state);
+  const node = next.nodes.find(n => n.id === nodeId);
+  const player = next.players.find(p => p.id === playerId);
+  if (!node || !player) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  const timestamp = currentTimestamp();
+  if (!canAutoBombardNode(next, node, playerId)) {
+    return {
+      state: {
+        ...next,
+        activeCombatNodeId: null,
+        activeCombatUpdatedAt: timestamp,
+        activeCombatSummary: undefined,
+        lastAction: 'auto_bombardment_complete',
+        lastActionAt: timestamp,
+        lastUpdated: timestamp
+      },
+      report: [],
+      changed: true,
+      shouldContinue: false,
+      nodeId,
+      playerId
+    };
+  }
+
+  const readyShips = getAutoBombardShips(node, playerId).filter(ship => canBattleshipBombard(node, ship, playerId, next));
+  if (readyShips.length === 0) {
+    const nextDelaySeconds = getNextBombardDelaySeconds(node, playerId);
+    const waitSummary = `Auto bombardment waiting for ship cooldowns at ${node.name}. Next volley in ${Math.ceil(nextDelaySeconds)}s.`;
+    return {
+      state: {
+        ...next,
+        activeCombatNodeId: node.id,
+        activeCombatUpdatedAt: timestamp,
+        activeCombatSummary: waitSummary,
+        lastAction: 'auto_bombardment_waiting',
+        lastActionAt: timestamp,
+        lastUpdated: timestamp
+      },
+      report: [],
+      changed: true,
+      shouldContinue: true,
+      nextDelaySeconds,
+      nodeId,
+      playerId
+    };
+  }
+
+  const report: string[] = [];
+  const ship = readyShips[0];
+  if (ship) {
+    const target = node.groundUnits.find(g => isHostileOwner(next, playerId, g.owner));
+    if (target && canBattleshipBombard(node, ship, playerId, next)) {
+      const damage = rollDamage(ship.dmgMin, ship.dmgMax);
+      target.hp = Math.max(0, target.hp - damage);
+      target.turnsInTerritory = 0;
+      ship.turnsInTerritory = 0;
+      ship.bombardedThisTurn = true;
+      ship.lastBombardedAt = timestamp;
+      const defenderName = target.owner === 'npc'
+        ? 'Neutral Guardians'
+        : next.players.find(p => p.id === target.owner)?.name || 'enemy troops';
+      report.push(`[AUTO BOMBARD] ${node.name}: ${player.name}'s ${ship.type} bombarded ${defenderName} for ${damage} damage.`);
+      if (target.hp <= 0) {
+        node.groundUnits = node.groundUnits.filter(g => g.id !== target.id);
+        report.push(`- DESTROYED: defending ground unit eliminated from orbit.`);
+      } else {
+        report.push(`- Defender HP remaining: ${target.hp}/${target.maxHp}.`);
+      }
+    }
+  }
+
+  const hostileGroundRemain = node.groundUnits.some(g => isHostileOwner(next, playerId, g.owner));
+  const shipsRemain = getAutoBombardShips(node, playerId).length > 0;
+  const shouldContinue = hostileGroundRemain && shipsRemain && canAutoBombardNode(next, node, playerId);
+  const nextDelaySeconds = shouldContinue ? getNextBombardDelaySeconds(node, playerId) : undefined;
+  if (report.length === 0) {
+    report.push(`Auto bombardment waiting at ${node.name}.`);
+  }
+  report.push(shouldContinue ? `Next auto bombardment shot queued in ${(nextDelaySeconds || REALTIME_ACTION_SECONDS.combatRound).toFixed((nextDelaySeconds || REALTIME_ACTION_SECONDS.combatRound) % 1 === 0 ? 0 : 1)}s.` : `Auto bombardment complete at ${node.name}.`);
+
+  return {
+    state: {
+      ...next,
+      actionLog: [...next.actionLog, ...report].slice(-100),
+      activeCombatNodeId: shouldContinue ? node.id : null,
+      activeCombatUpdatedAt: timestamp,
+      activeCombatSummary: shouldContinue ? report[0] : undefined,
+      lastAction: shouldContinue ? 'auto_bombardment_round' : 'auto_bombardment_complete',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    },
+    report,
+    changed: true,
+    shouldContinue,
+    nextDelaySeconds,
+    nodeId,
+    playerId
+  };
+}
+
+export function startAutoInvasion(state: GameState, nodeId: string, playerId: string): GameState {
+  const node = state.nodes.find(n => n.id === nodeId);
+  const playerName = state.players.find(p => p.id === playerId)?.name || 'Commander';
+  if (!node) return state;
+  if (hasQueuedAutoAction(state, nodeId, playerId, 'auto_invasion')) {
+    return cancelAutoCombatAction(state, nodeId, playerId, 'auto_invasion', `[AUTO INVASION] ${playerName} stopped auto invasion at ${node.name}.`);
+  }
+  const enemyShipsInOrbit = node.ships.some(s => s.blocksMovement && isHostileOwner(state, playerId, s.owner));
+  const carriersReady = node.ships.some(s => s.owner === playerId && s.type === 'Carrier' && s.carriedUnits.length > 0);
+  const friendlyGroundReady = node.groundUnits.some(g => g.owner === playerId);
+  const hostileGround = node.groundUnits.some(g => isHostileOwner(state, playerId, g.owner));
+  if (enemyShipsInOrbit || (!carriersReady && !(friendlyGroundReady && hostileGround))) return state;
+  return queueAutoCombatAction(
+    state,
+    nodeId,
+    playerId,
+    'auto_invasion',
+    `Auto invasion at ${node.name}`,
+    `[AUTO INVASION] ${playerName} ordered timed invasion at ${node.name}. First assault step in ${REALTIME_ACTION_SECONDS.combatRound}s.`
+  );
+}
+
+export function resolveAutoSpaceBattleRound(state: GameState, nodeId: string, playerId: string): AutoCombatTickResult {
+  const next = cloneGameState(state);
+  const node = next.nodes.find(n => n.id === nodeId);
+  const player = next.players.find(p => p.id === playerId);
+  if (!node || !player) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  const attackerChoice = getAutoAttackOptions(node, playerId)[0];
+  const defender = getAutoDefenderOptions(next, node, playerId)[0];
+  if (!attackerChoice || !defender) {
+    const timestamp = currentTimestamp();
+    return {
+      state: {
+        ...next,
+        activeCombatNodeId: null,
+        activeCombatUpdatedAt: timestamp,
+        activeCombatSummary: undefined,
+        lastAction: 'auto_space_battle_cleared',
+        lastActionAt: timestamp,
+        lastUpdated: timestamp
+      },
+      report: [],
+      changed: true,
+      shouldContinue: false,
+      nodeId,
+      playerId
+    };
+  }
+
+  const attackerRef = findAutoShipCombatant(node, attackerChoice.id);
+  if (!attackerRef) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  const defenderOwnerName = defender.owner === 'npc'
+    ? 'Neutral Guardians'
+    : next.players.find(p => p.id === defender.owner)?.name || 'enemy';
+  const result = resolveSpaceCombat(attackerRef.ship, defender, node, node);
+  const report = [
+    `[AUTO SPACE] ${node.name}: ${player.name}'s ${attackerRef.ship.type} fired on ${defenderOwnerName} ${defender.type}.`,
+    `- Damage: ${result.attackerDmg} dealt / ${result.defenderDmg} returned.`
+  ];
+  if (result.defenderDestroyed) report.push(`- DESTROYED: enemy ${defender.type}.`);
+  if (result.attackerDestroyed) report.push(`- LOST: ${player.name}'s ${attackerRef.ship.type}.`);
+  if (result.carriedLossesCount > 0) report.push(`- CARRIER CARGO LOST: ${result.carriedLossesCount} unit(s).`);
+
+  const hostileRemain = node.ships.some(s => isHostileOwner(next, playerId, s.owner));
+  const attackersRemain = getAutoAttackOptions(node, playerId).length > 0;
+  const shouldContinue = hostileRemain && attackersRemain;
+  report.push(shouldContinue ? `Next auto volley queued in ${REALTIME_ACTION_SECONDS.combatRound}s.` : hostileRemain ? `Auto battle stopped: no attack-capable friendly ships remain.` : `Orbit cleared at ${node.name}.`);
+
+  const timestamp = currentTimestamp();
+  return {
+    state: {
+      ...next,
+      actionLog: [...next.actionLog, ...report].slice(-100),
+      activeCombatNodeId: shouldContinue ? node.id : null,
+      activeCombatUpdatedAt: timestamp,
+      activeCombatSummary: shouldContinue ? report[0] : undefined,
+      lastAction: shouldContinue ? 'auto_space_battle_round' : 'auto_space_battle_cleared',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    },
+    report,
+    changed: true,
+    shouldContinue,
+    nodeId,
+    playerId
+  };
+}
+
+export function resolveAutoGroundCombatRound(state: GameState, nodeId: string, playerId: string, invadeFirst = false): AutoCombatTickResult {
+  let next = cloneGameState(state);
+  let report: string[] = [];
+  let node = next.nodes.find(n => n.id === nodeId);
+  const player = next.players.find(p => p.id === playerId);
+  if (!node || !player) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  const enemyShipsInOrbit = node.ships.some(s => s.blocksMovement && isHostileOwner(next, playerId, s.owner));
+  if (enemyShipsInOrbit) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  if (invadeFirst && !node.groundUnits.some(g => g.owner === playerId)) {
+    const invasion = invadePlanetWithCarriers(next, nodeId, playerId);
+    if (invasion.state !== next) {
+      next = invasion.state;
+      report = [...report, ...invasion.report];
+      node = next.nodes.find(n => n.id === nodeId);
+    }
+  }
+
+  if (!node) return { state, report, changed: report.length > 0, shouldContinue: false, nodeId, playerId };
+  const attacker = node.groundUnits.find(g => g.owner === playerId);
+  const defender = node.groundUnits.find(g => isHostileOwner(next, playerId, g.owner));
+  if (attacker && defender) {
+    const round = resolveGroundCombatRound(next, nodeId, attacker.id, defender.id, playerId);
+    if (round) {
+      next = round.state;
+      report = [...report, ...round.report];
+      node = next.nodes.find(n => n.id === nodeId);
+    }
+  }
+
+  node = next.nodes.find(n => n.id === nodeId);
+  const hostileGroundRemain = Boolean(node?.groundUnits.some(g => isHostileOwner(next, playerId, g.owner)));
+  const friendlyGroundRemain = Boolean(node?.groundUnits.some(g => g.owner === playerId));
+  const captured = Boolean(node && node.claimedBy === playerId && !hostileGroundRemain && friendlyGroundRemain);
+  const shouldContinue = hostileGroundRemain && friendlyGroundRemain;
+  const changed = report.length > 0;
+  if (!changed) return { state, report: [], changed: false, shouldContinue: false, nodeId, playerId };
+
+  if (shouldContinue) report.push(`Next auto ground clash queued in ${REALTIME_ACTION_SECONDS.combatRound}s.`);
+  else if (captured) report.push(`Auto invasion complete: ${node?.name || 'planet'} captured.`);
+  else if (hostileGroundRemain) report.push(`Auto invasion stopped: no friendly ground troops remain.`);
+  else report.push(`Auto ground battle complete.`);
+
+  const timestamp = currentTimestamp();
+  return {
+    state: {
+      ...next,
+      actionLog: [...next.actionLog, ...report].slice(-100),
+      activeCombatNodeId: shouldContinue ? nodeId : null,
+      activeCombatUpdatedAt: timestamp,
+      activeCombatSummary: shouldContinue ? report[report.length - 1] : undefined,
+      lastAction: captured ? 'auto_invasion_captured' : shouldContinue ? 'auto_ground_combat_round' : 'auto_ground_combat_complete',
+      lastActionAt: timestamp,
+      lastUpdated: timestamp
+    },
+    report,
+    changed: true,
+    shouldContinue,
+    nodeId,
+    playerId
+  };
 }
 
 export function autoResolveSpaceBattle(state: GameState, nodeId: string, playerId: string) {
@@ -1879,7 +2376,7 @@ export function processRealtimeIncome(state: GameState, nowMs = Date.now()): { s
 
   for (let tick = 0; tick < ticks; tick++) {
     for (const player of state.players) {
-      actionLog.push(...processHealing(nodes, player.id).map(line => `[REAL TIME] ${line}`));
+      actionLog.push(...processHealing(nodes, player.id, state.alliances).map(line => `[REAL TIME] ${line}`));
     }
   }
 

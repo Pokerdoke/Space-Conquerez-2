@@ -1,7 +1,7 @@
 export interface Player {
   id: string; // persistent local UUID for human players, or 'npc'
   name: string;
-  color: 'green' | 'blue' | 'purple' | 'yellow';
+  color: 'green' | 'blue' | 'purple' | 'yellow' | 'red' | 'cyan' | 'orange' | 'pink';
   ready: boolean;
   resources: number;
   isNpc: boolean;
@@ -45,8 +45,10 @@ export interface Ship {
   carriedFighters: Ship[];
   /** The most recent system this ship moved from. Used for FTL inhibitor retreat rules. */
   lastNodeId?: string | null;
-  /** Battleships may bombard a planet once per owning player's turn. */
+  /** Legacy turn flag kept for old saves. */
   bombardedThisTurn?: boolean;
+  /** Real-time orbital bombardment cooldown timestamp. */
+  lastBombardedAt?: string | null;
 }
 
 export interface StarNode {
@@ -94,7 +96,7 @@ export interface ChatMessage {
 
 export interface PendingRealtimeAction {
   id: string;
-  type: 'build_ship' | 'build_ground' | 'upgrade_planet' | 'build_structure' | 'deconstruct_structure' | 'move_ship' | 'colonize' | 'scrap_ship';
+  type: 'build_ship' | 'build_ground' | 'upgrade_planet' | 'build_structure' | 'deconstruct_structure' | 'move_ship' | 'colonize' | 'scrap_ship' | 'auto_space_combat' | 'auto_ground_combat' | 'auto_invasion' | 'auto_orbital_bombardment';
   playerId: string;
   nodeId: string;
   targetNodeId?: string;
@@ -122,6 +124,8 @@ export interface GameState {
   /** True when the lobby appears in the public games browser. */
   isPublic?: boolean;
   status: 'lobby' | 'playing' | 'completed';
+  /** Monotonic version used to prevent older multiplayer clients from overwriting newer actions. */
+  stateVersion?: number;
   players: Player[];
   activePlayerIndex: number; // Index in the players array
   phase: 0 | 1 | 2; // 0 = Build, 1 = Move, 2 = Attack/Colonize
@@ -147,6 +151,7 @@ export interface GameState {
     title: string;
     objective: string;
     steps: string[];
+    intro?: string;
   };
 }
 
