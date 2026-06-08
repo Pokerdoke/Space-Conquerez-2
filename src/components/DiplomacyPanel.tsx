@@ -20,7 +20,6 @@ const colorClass = {
 
 export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPlayerId, onClose, onUpdateState }) => {
   const me = gameState.players.find(p => p.id === myPlayerId);
-  const isMyTurn = gameState.players[gameState.activePlayerIndex]?.id === myPlayerId;
   const opponents = gameState.players.filter(p => p.id !== myPlayerId);
 
   const pendingBreakIds = useMemo(() => new Set((gameState.alliances || [])
@@ -42,14 +41,9 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
       nextAlliances.push({ id: generateId(), playerIds: [myPlayerId, otherId], status: 'active' });
       log.push(`${me.name} formed an alliance with ${other?.name || 'another empire'}. FTL inhibitors are now friendly and combat is blocked between them.`);
     } else {
-      if (!existing || existing.status === 'breaking') return;
-      nextAlliances = alliances.map(a => a.id === existing.id ? {
-        ...a,
-        status: 'breaking',
-        breakRequestedBy: myPlayerId,
-        breakEffectiveAfterPlayerId: myPlayerId
-      } : a);
-      log.push(`${me.name} will break alliance with ${other?.name || 'another empire'} after their action phase ends.`);
+      if (!existing) return;
+      nextAlliances = alliances.filter(a => a.id !== existing.id);
+      log.push(`${me.name} ended the alliance with ${other?.name || 'another empire'}.`);
     }
 
     await onUpdateState({
@@ -74,9 +68,8 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
 
         <div className="p-4 space-y-3">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Allies can pass through each other's FTL inhibitors and cannot invade or fire on each other. Breaking an alliance takes effect after your Attack/Action phase ends.
+            Allies can pass through each other's FTL inhibitors and cannot invade or fire on each other. Alliances can be ended at any time in real time.
           </p>
-          {!isMyTurn && <div className="text-[10px] text-slate-500 bg-slate-900 border border-slate-800 rounded p-2">Diplomacy changes are safest during your active turn.</div>}
           {opponents.map(player => {
             const allied = isAllied(gameState, myPlayerId, player.id);
             const pendingBreak = pendingBreakIds.has(player.id);
@@ -85,7 +78,7 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({ gameState, myPla
                 <div>
                   <div className="font-bold text-sm">{player.name}</div>
                   <div className="text-[10px] font-mono opacity-80">
-                    {pendingBreak ? 'Break pending after your action phase' : allied ? 'Alliance active' : 'No alliance'}
+                    {pendingBreak ? 'Alliance ending' : allied ? 'Alliance active' : 'No alliance'}
                   </div>
                 </div>
                 {allied || pendingBreak ? (

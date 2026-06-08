@@ -41,12 +41,77 @@ interface LobbyProps {
 
 type LobbyView = 'welcome' | 'create' | 'join' | 'public' | 'waiting' | 'tutorial';
 
+const GALAXY_TYPES: { type: NonNullable<GameState['galaxyType']>; label: string; desc: string }[] = [
+  { type: 'spiral2', label: '2-Arm Spiral', desc: 'broad twin arms' },
+  { type: 'spiral3', label: '3-Arm Spiral', desc: 'balanced tri-spiral' },
+  { type: 'spiral4', label: '4-Arm Spiral', desc: 'classic dense spiral' },
+  { type: 'ring', label: 'Ring', desc: 'outer ring + hub' },
+  { type: 'circular', label: 'Circular', desc: 'classic round map' }
+];
+
+const GalaxyShapeIcon: React.FC<{ type?: GameState['galaxyType']; className?: string }> = ({ type = 'spiral4', className = 'h-10 w-full' }) => {
+  const safeType = type || 'spiral4';
+  return (
+    <svg viewBox="0 0 90 44" className={className} aria-hidden="true">
+      <rect x="1" y="1" width="88" height="42" rx="8" fill="rgba(2,6,23,0.8)" stroke="rgba(56,189,248,0.22)" />
+      {safeType === 'spiral2' && (
+        <>
+          <circle cx="45" cy="22" r="3.4" fill="#f8fafc" opacity="0.95" />
+          <path d="M45 22 C35 14 25 12 14 12 C9 12 8 19 13 21 C23 24 33 28 39 34" fill="none" stroke="#67e8f9" strokeWidth="2.1" strokeLinecap="round" opacity="0.9" />
+          <path d="M45 22 C55 30 65 32 76 32 C81 32 82 25 77 23 C67 20 57 16 51 10" fill="none" stroke="#67e8f9" strokeWidth="2.1" strokeLinecap="round" opacity="0.9" />
+        </>
+      )}
+      {safeType === 'spiral3' && (
+        <>
+          <circle cx="45" cy="22" r="3.3" fill="#f8fafc" opacity="0.95" />
+          <path d="M45 22 C37 16 27 14 19 11 C12 9 10 16 15 20 C23 24 31 27 36 33" fill="none" stroke="#67e8f9" strokeWidth="1.9" strokeLinecap="round" opacity="0.9" />
+          <path d="M45 22 C55 18 63 12 68 8 C74 4 81 10 77 16 C72 23 63 24 56 25" fill="none" stroke="#818cf8" strokeWidth="1.9" strokeLinecap="round" opacity="0.85" />
+          <path d="M45 22 C47 31 50 35 54 38 C59 42 52 43 46 39 C40 35 39 29 38 24" fill="none" stroke="#38bdf8" strokeWidth="1.9" strokeLinecap="round" opacity="0.85" />
+        </>
+      )}
+      {safeType === 'spiral4' && (
+        <>
+          <circle cx="45" cy="22" r="3.2" fill="#f8fafc" opacity="0.95" />
+          <path d="M45 22 C37 16 29 11 19 10 C12 9 10 15 15 19 C24 24 31 27 36 33" fill="none" stroke="#67e8f9" strokeWidth="1.7" strokeLinecap="round" opacity="0.9" />
+          <path d="M45 22 C53 16 61 11 71 10 C78 9 80 15 75 19 C66 24 59 27 54 33" fill="none" stroke="#67e8f9" strokeWidth="1.7" strokeLinecap="round" opacity="0.9" />
+          <path d="M45 22 C39 27 34 33 31 38 C28 42 21 38 25 33 C29 28 35 25 40 22" fill="none" stroke="#818cf8" strokeWidth="1.55" strokeLinecap="round" opacity="0.82" />
+          <path d="M45 22 C51 27 56 33 59 38 C62 42 69 38 65 33 C61 28 55 25 50 22" fill="none" stroke="#818cf8" strokeWidth="1.55" strokeLinecap="round" opacity="0.82" />
+        </>
+      )}
+      {safeType === 'ring' && (
+        <>
+          <ellipse cx="45" cy="22" rx="29" ry="12" fill="none" stroke="#67e8f9" strokeWidth="2.1" opacity="0.9" />
+          <circle cx="45" cy="22" r="5.6" fill="rgba(248,250,252,0.78)" />
+          <circle cx="45" cy="22" r="2.4" fill="#020617" opacity="0.45" />
+        </>
+      )}
+      {safeType === 'circular' && (
+        <>
+          <circle cx="45" cy="22" r="15" fill="none" stroke="#67e8f9" strokeWidth="1.9" opacity="0.88" />
+          <circle cx="45" cy="22" r="9.2" fill="none" stroke="#38bdf8" strokeWidth="1.2" opacity="0.65" />
+          <circle cx="45" cy="22" r="3.2" fill="#f8fafc" opacity="0.92" />
+        </>
+      )}
+      {Array.from({ length: 14 }).map((_, i) => (
+        <circle
+          key={i}
+          cx={12 + ((i * 17) % 67)}
+          cy={8 + ((i * 11) % 28)}
+          r={i % 3 === 0 ? 1.05 : 0.6}
+          fill="#ccfbf1"
+          opacity={0.22 + (i % 5) * 0.08}
+        />
+      ))}
+    </svg>
+  );
+};
 export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMode, onStartTutorialScenario }) => {
   const [view, setView] = useState<LobbyView>('welcome');
   const [playerName, setPlayerName] = useState(() => getSavedPlayerName());
   const [roomCode, setRoomCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
   const [mapSize, setMapSize] = useState<GameState['mapSize']>('small');
+  const [galaxyType, setGalaxyType] = useState<NonNullable<GameState['galaxyType']>>('spiral4');
   const [npcCount, setNpcCount] = useState<3 | 5 | 7>(3);
   const [isPublic, setIsPublic] = useState(true);
 
@@ -129,7 +194,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     
     try {
       savePlayerName(playerName);
-      const { code, state } = await createGameRoom(playerName.trim(), maxPlayers, mapSize, npcCount, isPublic);
+      const { code, state } = await createGameRoom(playerName.trim(), maxPlayers, mapSize, npcCount, isPublic, galaxyType);
       
       setCurrentCode(code);
       setGameState(state);
@@ -254,7 +319,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
     await updateRoomState(currentCode, updatedState);
   };
 
-  const handleHostSettingsChange = async (changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'npcCount' | 'isPublic'>>) => {
+  const handleHostSettingsChange = async (changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'galaxyType' | 'npcCount' | 'isPublic'>>) => {
     if (!gameState || !currentCode || settingsSaving) return;
     setErrorMsg('');
     setSettingsSaving(true);
@@ -279,7 +344,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
       large: 100
     };
     const nodeCount = mapNodeCounts[gameState.mapSize];
-    const nodes = generateMap(nodeCount, gameState.players, gameState.npcCount);
+    const nodes = generateMap(nodeCount, gameState.players, gameState.npcCount, gameState.galaxyType || 'spiral4');
 
     const updatedState: GameState = {
       ...gameState,
@@ -287,6 +352,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
       nodes,
       actionLog: [...gameState.actionLog, 'Game started by creator! Good luck commanders!'],
       turnStartedAt: new Date().toISOString(),
+      realtimeIncomeLastAt: new Date().toISOString(),
+      pendingActions: [],
       lastAction: 'start_game',
       lastActionAt: new Date().toISOString(),
       activeCombatNodeId: null,
@@ -516,6 +583,28 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
               </div>
             </div>
 
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Galaxy Type</label>
+              <div className="grid grid-cols-2 gap-2">
+                {GALAXY_TYPES.map((shape) => (
+                  <button
+                    key={shape.type}
+                    type="button"
+                    onClick={() => { audio.playBeep(); setGalaxyType(shape.type); }}
+                    className={`p-2 text-left border rounded transition-all ${
+                      galaxyType === shape.type
+                        ? 'border-cyan-400 bg-cyan-950/20 text-cyan-200 shadow-[0_0_10px_rgba(34,211,238,0.18)]'
+                        : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <GalaxyShapeIcon type={shape.type} />
+                    <span className="mt-1 block text-[10px] font-bold uppercase">{shape.label}</span>
+                    <span className="block text-[8px] font-mono opacity-60">{shape.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={() => { audio.playBeep(); setIsPublic(v => !v); }}
@@ -611,7 +700,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                         Host: <span className="text-slate-200 font-bold">{game.hostName}</span>
                       </div>
                       <div className="text-[11px] text-slate-500 mt-1 font-mono uppercase">
-                        {game.playerCount}/{game.maxPlayers} players • {game.mapSize} map • {game.npcCount} NPC systems
+                        {game.playerCount}/{game.maxPlayers} players • {game.mapSize} map • {(game.galaxyType || 'spiral4')} galaxy • {game.npcCount} NPC systems
                       </div>
                     </div>
                     <button
@@ -789,8 +878,30 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
                     ))}
                   </div>
                 </div>
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Galaxy Shape</label>
+                <div className="grid grid-cols-5 gap-2">
+                  {GALAXY_TYPES.map(shape => (
+                    <button
+                      key={shape.type}
+                      type="button"
+                      disabled={settingsSaving}
+                      onClick={() => handleHostSettingsChange({ galaxyType: shape.type })}
+                      className={`p-1.5 text-[9px] font-bold uppercase border rounded disabled:opacity-50 ${
+                        (gameState.galaxyType || 'spiral4') === shape.type
+                          ? 'border-cyan-400 bg-cyan-950/30 text-cyan-200'
+                          : 'border-slate-800 bg-slate-950 text-slate-500 hover:text-slate-200'
+                      }`}
+                    >
+                      <GalaxyShapeIcon type={shape.type} className="h-8 w-full" />
+                      {shape.label}
+                    </button>
+                  ))}
+                  </div>
+                </div>
               </div>
             )}
+
 
             {!isHost && gameState.status === 'lobby' && (
               <div className="p-3 rounded border border-slate-800 bg-slate-950/40 text-xs text-slate-400">
@@ -798,7 +909,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
               </div>
             )}
 
-            <div className="grid grid-cols-4 gap-2 text-center text-xs bg-slate-950/50 border border-slate-800/40 p-2.5 rounded font-mono">
+            <div className="grid grid-cols-5 gap-2 text-center text-xs bg-slate-950/50 border border-slate-800/40 p-2.5 rounded font-mono">
               <div>
                 <span className="text-[9px] text-slate-500 block">MAP SIZE</span>
                 <span className="text-slate-300 font-bold uppercase">{gameState.mapSize}</span>
@@ -806,6 +917,10 @@ export const Lobby: React.FC<LobbyProps> = ({ onGameStart, onOpenSettings, dbMod
               <div>
                 <span className="text-[9px] text-slate-500 block">NPC</span>
                 <span className="text-slate-300 font-bold">{gameState.npcCount}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-slate-500 block">GALAXY</span>
+                <span className="text-slate-300 font-bold uppercase">{gameState.galaxyType || 'spiral4'}</span>
               </div>
               <div>
                 <span className="text-[9px] text-slate-500 block">CAPACITY</span>

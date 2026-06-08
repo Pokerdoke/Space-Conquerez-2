@@ -1,4 +1,4 @@
-import type { GameState, StarNode, Ship, GroundUnit, Player, PlanetDevelopment, PlanetBiome } from '../types';
+import type { GameState, StarNode, Ship, GroundUnit, Player, PlanetDevelopment, PlanetBiome, PendingRealtimeAction, GalaxyType } from '../types';
 
 // Sci-Fi Names for Nodes
 const STAR_NAMES = [
@@ -156,6 +156,257 @@ export function getGroundUnitBuildLimit(development: PlanetDevelopment): number 
   return 0;
 }
 
+
+export const REALTIME_ACTION_SECONDS = {
+  buildGround: 10,
+  buildShip: {
+    Fighter: 10,
+    Destroyer: 18,
+    BattleShip: 28,
+    Carrier: 24,
+    ColonyShip: 16
+  } as Record<Ship['type'], number>,
+  upgradeBase: 14,
+  structure: {
+    Shipyard: 24,
+    FtlInhibitor: 16,
+    Gateway: 28
+  } as Record<'Shipyard' | 'FtlInhibitor' | 'Gateway', number>,
+  deconstruct: 10,
+  colonize: 20,
+  scrap: 10,
+  combatRound: 1.5
+};
+
+export function clampRealtimeSeconds(seconds: number): number {
+  return Math.max(5, Math.min(55, Math.round(seconds)));
+}
+
+export function getMoveDurationSeconds(_source: StarNode, _target: StarNode, costInMoves = 1): number {
+  // Real-time movement is based on hyperlane hops: 1 planet away = 15s, 2 = 30s, 3 = 45s, 4+ = 60s.
+  return Math.max(15, Math.min(60, Math.ceil(costInMoves) * 15));
+}
+
+export function getBuildDurationSeconds(action: PendingRealtimeAction['type'], detail?: string): number {
+  if (action === 'build_ship' && detail && detail in REALTIME_ACTION_SECONDS.buildShip) {
+    return REALTIME_ACTION_SECONDS.buildShip[detail as Ship['type']];
+  }
+  if (action === 'build_structure' && detail && detail in REALTIME_ACTION_SECONDS.structure) {
+    return REALTIME_ACTION_SECONDS.structure[detail as 'Shipyard' | 'FtlInhibitor' | 'Gateway'];
+  }
+  if (action === 'upgrade_planet' && detail) {
+    return clampRealtimeSeconds(REALTIME_ACTION_SECONDS.upgradeBase + getPlanetLevel(detail as PlanetDevelopment) * 5);
+  }
+  if (action === 'deconstruct_structure') return REALTIME_ACTION_SECONDS.deconstruct;
+  if (action === 'build_ground') return REALTIME_ACTION_SECONDS.buildGround;
+  if (action === 'colonize') return REALTIME_ACTION_SECONDS.colonize;
+  if (action === 'scrap_ship') return REALTIME_ACTION_SECONDS.scrap;
+  return 12;
+}
+
+export function formatSeconds(seconds: number): string {
+  return `${Math.max(0, Math.ceil(seconds))}s`;
+}
+
+export function createPendingAction(input: Omit<PendingRealtimeAction, 'id' | 'startedAt' | 'completesAt'>, now = Date.now()): PendingRealtimeAction {
+  const startedAt = new Date(now).toISOString();
+  const completesAt = new Date(now + input.durationSeconds * 1000).toISOString();
+  return {
+    id: generateId(),
+    ...input,
+    startedAt,
+    completesAt
+  };
+}
+
+function pushRealtimeLog(logs: string[], message: string) {
+  logs.push(`[REAL TIME] ${message}`);
+}
+
+export function processRealtimeActions(state: GameState, nowMs = Date.now()): { state: GameState; changed: boolean; completed: PendingRealtimeAction[] } {
+  const pending = state.pendingActions || [];
+  if (pending.length === 0) return { state, changed: false, completed: [] };
+
+  const due = pending.filter(action => new Date(action.completesAt).getTime() <= nowMs);
+  if (due.length === 0) return { state, changed: false, completed: [] };
+
+  let nodes = state.nodes.map(node => ({
+    ...node,
+    ships: node.ships.map(ship => ({ ...ship, carriedUnits: ship.carriedUnits.map(u => ({ ...u })), carriedFighters: ship.carriedFighters.map(f => ({ ...f })) })),
+    groundUnits: node.groundUnits.map(unit => ({ ...unit }))
+  }));
+  let players = state.players.map(player => ({ ...player }));
+  const actionLog = [...state.actionLog];
+
+  const nodeById = (id: string) => nodes.find(node => node.id === id);
+  const playerName = (id: string) => players.find(p => p.id === id)?.name || 'Commander';
+
+  for (const action of due) {
+    const node = nodeById(action.nodeId);
+    if (!node) continue;
+
+    switch (action.type) {
+      case 'build_ship': {
+        if (!action.shipType) break;
+        node.ships.push(createShip(action.shipType, action.playerId));
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} completed ${action.shipType} at ${node.name}.`);
+        break;
+      }
+      case 'build_ground': {
+        if (countFriendlyGroundUnits(node, action.playerId) >= getGroundUnitCapacity(node.development)) {
+          pushRealtimeLog(actionLog, `${playerName(action.playerId)} could not deploy ground unit at ${node.name}; surface capacity is full.`);
+          break;
+        }
+        node.groundUnits.push(createGroundUnit(action.playerId));
+        node.groundUnitsBuiltThisTurn = (node.groundUnitsBuiltThisTurn || 0) + 1;
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} completed ground unit training at ${node.name}.`);
+        break;
+      }
+      case 'upgrade_planet': {
+        if (!action.targetDevelopment) break;
+        node.development = action.targetDevelopment;
+        node.resourceGeneration = getPlanetResourceGeneration(action.targetDevelopment);
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} completed ${node.name} upgrade to ${action.targetDevelopment.toUpperCase()}.`);
+        break;
+      }
+      case 'build_structure': {
+        if (!action.structureType) break;
+        if (action.structureType === 'Shipyard') node.hasShipyard = true;
+        if (action.structureType === 'FtlInhibitor') node.hasFtlInhibitor = true;
+        if (action.structureType === 'Gateway') node.hasGateway = true;
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} completed ${action.structureType} at ${node.name}.`);
+        break;
+      }
+      case 'deconstruct_structure': {
+        if (!action.structureType) break;
+        if (action.structureType === 'Shipyard') node.hasShipyard = false;
+        if (action.structureType === 'FtlInhibitor') node.hasFtlInhibitor = false;
+        if (action.structureType === 'Gateway') node.hasGateway = false;
+        const refund = Math.floor(STRUCTURE_COSTS[action.structureType] / 2);
+        players = players.map(player => player.id === action.playerId ? { ...player, resources: player.resources + refund } : player);
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} finished removing ${action.structureType} at ${node.name} (+${refund}R).`);
+        break;
+      }
+      case 'move_ship': {
+        if (!action.ship || !action.targetNodeId) break;
+        const target = nodeById(action.targetNodeId);
+        if (!target) break;
+        target.ships.push({
+          ...action.ship,
+          inTransit: false,
+          transitToNodeId: null,
+          transitCompletesAt: null,
+          canMove: action.ship.type !== 'Fighter',
+          movesLeft: action.ship.type === 'Fighter' ? 0 : 4,
+          turnsInTerritory: 0,
+          lastNodeId: action.nodeId
+        });
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)}'s ${action.ship.type} arrived at ${target.name}.`);
+        break;
+      }
+      case 'colonize': {
+        if (!action.shipId) break;
+        node.ships = node.ships.filter(ship => ship.id !== action.shipId);
+        node.claimedBy = action.playerId;
+        node.development = 'colony';
+        node.resourceGeneration = 2;
+        node.isNpcPlanet = false;
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} finished colonizing ${node.name}.`);
+        break;
+      }
+      case 'scrap_ship': {
+        if (!action.shipId) break;
+        const ship = node.ships.find(s => s.id === action.shipId);
+        if (!ship) break;
+        const refund = Math.floor(SHIP_STATS[ship.type].cost * 0.75);
+        node.ships = node.ships.filter(s => s.id !== action.shipId);
+        players = players.map(player => player.id === action.playerId ? { ...player, resources: player.resources + refund } : player);
+        pushRealtimeLog(actionLog, `${playerName(action.playerId)} finished scrapping ${ship.type} at ${node.name} (+${refund}R).`);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  const dueIds = new Set(due.map(action => action.id));
+  return {
+    state: {
+      ...state,
+      players,
+      nodes,
+      pendingActions: pending.filter(action => !dueIds.has(action.id)),
+      actionLog,
+      lastAction: 'realtime_actions_completed',
+      lastActionAt: new Date(nowMs).toISOString(),
+      lastUpdated: new Date(nowMs).toISOString()
+    },
+    changed: true,
+    completed: due
+  };
+}
+
+
+export function getRealtimeActionRefund(action: PendingRealtimeAction): number {
+  if (typeof action.refundCost === 'number') return Math.max(0, action.refundCost);
+  if (action.type === 'build_ship' && action.shipType) return SHIP_STATS[action.shipType].cost;
+  if (action.type === 'build_ground') return GROUND_UNIT_STATS.cost;
+  if (action.type === 'build_structure' && action.structureType) return STRUCTURE_COSTS[action.structureType];
+  if (action.type === 'upgrade_planet' && action.targetDevelopment) return PLANET_UPGRADES[action.targetDevelopment]?.cost || 0;
+  return 0;
+}
+
+export function cancelRealtimeAction(state: GameState, actionId: string, playerId: string): GameState {
+  const action = (state.pendingActions || []).find(a => a.id === actionId);
+  if (!action || action.playerId !== playerId) return state;
+
+  const nodes = state.nodes.map(node => ({
+    ...node,
+    ships: node.ships.map(ship => ({
+      ...ship,
+      carriedUnits: ship.carriedUnits.map(unit => ({ ...unit })),
+      carriedFighters: ship.carriedFighters.map(fighter => ({ ...fighter }))
+    })),
+    groundUnits: node.groundUnits.map(unit => ({ ...unit }))
+  }));
+  const refund = getRealtimeActionRefund(action);
+  const players = state.players.map(player =>
+    player.id === playerId ? { ...player, resources: player.resources + refund } : player
+  );
+  const node = nodes.find(n => n.id === action.nodeId);
+  const playerName = state.players.find(p => p.id === playerId)?.name || 'Commander';
+
+  if (action.type === 'move_ship' && action.ship && node) {
+    const shipAlreadyExists = nodes.some(n => n.ships.some(s => s.id === action.shipId));
+    if (!shipAlreadyExists) {
+      node.ships.push({
+        ...action.ship,
+        inTransit: false,
+        transitToNodeId: null,
+        transitCompletesAt: null,
+        lastNodeId: action.ship.lastNodeId ?? null
+      });
+    }
+  }
+
+  const actionLog = [
+    ...state.actionLog,
+    `[REAL TIME] ${playerName} cancelled ${action.label}${refund > 0 ? ` and recovered ${refund}R` : ''}.`
+  ].slice(-80);
+  const timestamp = new Date().toISOString();
+
+  return {
+    ...state,
+    nodes,
+    players,
+    pendingActions: (state.pendingActions || []).filter(a => a.id !== actionId),
+    actionLog,
+    lastAction: 'cancel_realtime_action',
+    lastActionAt: timestamp,
+    lastUpdated: timestamp
+  };
+}
+
 // Generate a random ID
 export const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -195,16 +446,14 @@ export function createGroundUnit(owner: string): GroundUnit {
   };
 }
 
-// Generate the Map using concentric rings
-export function generateMap(nodeCount: number, players: Player[], npcCount: number): StarNode[] {
-  const nodes: StarNode[] = [];
-  const rings = Math.ceil(Math.sqrt(nodeCount / 3));
-  const maxRadius = 450;
-  const centerX = 500;
-  const centerY = 500;
+const SMALL_MAP_NODE_COUNT = 30;
+const SMALL_MAP_RADIUS = 450;
 
-  // 1. Calculate node distribution per ring
-  // Outer rings get more nodes (proportional to ring index)
+function getRingCount(nodeCount: number): number {
+  return Math.ceil(Math.sqrt(nodeCount / 3));
+}
+
+function getNodesPerRing(nodeCount: number, rings: number): number[] {
   let ringWeightsSum = 0;
   for (let r = 1; r <= rings; r++) {
     ringWeightsSum += r;
@@ -215,56 +464,315 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
   for (let r = 1; r <= rings; r++) {
     let count = Math.round(nodeCount * (r / ringWeightsSum));
     if (r === rings) {
-      count = nodeCount - allocated; // Final ring takes remainder
+      count = nodeCount - allocated;
     } else {
       allocated += count;
     }
     nodesPerRing.push(count);
   }
 
-  // Ensure center node has 1 node if needed, or ring 1 is small
   if (nodesPerRing[0] === 0) nodesPerRing[0] = 1;
+  return nodesPerRing;
+}
 
-  // Let's name and position the nodes
-  let nameIndex = 0;
+export function getMapLayoutRadius(nodeCount: number): number {
+  const rings = getRingCount(nodeCount);
+  const nodesPerRing = getNodesPerRing(nodeCount, rings);
+  const smallRings = getRingCount(SMALL_MAP_NODE_COUNT);
+  const smallNodesPerRing = getNodesPerRing(SMALL_MAP_NODE_COUNT, smallRings);
+
+  const smallOuterCount = Math.max(1, smallNodesPerRing[smallNodesPerRing.length - 1]);
+  const currentOuterCount = Math.max(1, nodesPerRing[nodesPerRing.length - 1]);
+  const smallOuterSpacing = (2 * Math.PI * SMALL_MAP_RADIUS) / smallOuterCount;
+
+  const radiusForSameOuterSpacing = (smallOuterSpacing * currentOuterCount) / (2 * Math.PI);
+  const radiusForSameDensity = SMALL_MAP_RADIUS * Math.sqrt(nodeCount / SMALL_MAP_NODE_COUNT);
+
+  return Math.round(Math.max(SMALL_MAP_RADIUS, radiusForSameOuterSpacing, radiusForSameDensity));
+}
+
+
+type GalaxyPoint = { x: number; y: number };
+
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+function jitter(amount: number) {
+  return (Math.random() * 2 - 1) * amount;
+}
+
+function clampGalaxyPoint(point: GalaxyPoint, centerX: number, centerY: number, maxRadius: number): GalaxyPoint {
+  const dx = point.x - centerX;
+  const dy = point.y - centerY;
+  const limit = maxRadius * 1.12;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= limit || dist === 0) return point;
+  const scale = limit / dist;
+  return {
+    x: Math.round(centerX + dx * scale),
+    y: Math.round(centerY + dy * scale)
+  };
+}
+
+function spreadApartPositions(
+  points: GalaxyPoint[],
+  centerX: number,
+  centerY: number,
+  maxRadius: number,
+  minDistance = 58
+): GalaxyPoint[] {
+  const working = points.map(point => ({ ...point }));
+  const maxIterations = 90;
+
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    let changed = false;
+
+    for (let i = 0; i < working.length; i++) {
+      for (let j = i + 1; j < working.length; j++) {
+        const a = working[i];
+        const b = working[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.hypot(dx, dy);
+
+        if (dist >= minDistance) continue;
+
+        if (dist < 0.01) {
+          const angle = (i * GOLDEN_ANGLE + j) % (Math.PI * 2);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          dist = 1;
+        }
+
+        const push = (minDistance - dist) * 0.52;
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+        changed = true;
+      }
+    }
+
+    for (let i = 0; i < working.length; i++) {
+      const clamped = clampGalaxyPoint(working[i], centerX, centerY, maxRadius);
+      working[i].x = clamped.x;
+      working[i].y = clamped.y;
+    }
+
+    if (!changed) break;
+  }
+
+  return working.map(point => ({ x: Math.round(point.x), y: Math.round(point.y) }));
+}
+
+function getClassicRingPositions(nodeCount: number, rings: number, maxRadius: number, centerX: number, centerY: number): GalaxyPoint[] {
+  const nodesPerRing = getNodesPerRing(nodeCount, rings);
+  const positions: GalaxyPoint[] = [];
   for (let rIndex = 0; rIndex < rings; rIndex++) {
     const ringNum = rIndex + 1;
     const radius = (ringNum / rings) * maxRadius;
     const count = nodesPerRing[rIndex];
-    
-    // Add angular perturbation to make map organic
     const angleOffset = (ringNum * Math.PI) / rings;
 
     for (let j = 0; j < count; j++) {
       const angle = (j * 2 * Math.PI) / count + angleOffset;
-      // Add slight noise to x/y to prevent perfect circles
-      const x = Math.round(centerX + Math.cos(angle) * radius + (Math.random() * 20 - 10));
-      const y = Math.round(centerY + Math.sin(angle) * radius + (Math.random() * 20 - 10));
-
-      const name = STAR_NAMES[nameIndex % STAR_NAMES.length] + 
-        (nameIndex >= STAR_NAMES.length ? ` ${Math.floor(nameIndex / STAR_NAMES.length) + 1}` : '');
-      
-      nodes.push({
-        id: `node-${nameIndex}`,
-        name,
-        x,
-        y,
-        links: [],
-        claimedBy: null,
-        development: 'none',
-        resourceGeneration: 1,
-        hasShipyard: false,
-        hasFtlInhibitor: false,
-        hasGateway: false,
-        ships: [],
-        groundUnits: [],
-        groundUnitsBuiltThisTurn: 0,
-        isNpcPlanet: false,
-        isDysonSphere: false,
-        biome: pickBiome(nameIndex)
+      positions.push({
+        x: Math.round(centerX + Math.cos(angle) * radius + jitter(9)),
+        y: Math.round(centerY + Math.sin(angle) * radius + jitter(9))
       });
-      nameIndex++;
     }
+  }
+  return spreadApartPositions(positions, centerX, centerY, maxRadius, 58);
+}
+
+function createSpiralGalaxyPositions(
+  nodeCount: number,
+  armCount: number,
+  maxRadius: number,
+  centerX: number,
+  centerY: number
+): GalaxyPoint[] {
+  const positions: GalaxyPoint[] = [];
+  const coreCount = Math.max(7, Math.min(16, Math.round(nodeCount * 0.12)));
+  const remaining = Math.max(0, nodeCount - coreCount);
+
+  // Compact but slightly irregular core so the arms feel natural instead of mathematically perfect.
+  for (let i = 0; i < coreCount; i++) {
+    const t = coreCount <= 1 ? 0 : i / (coreCount - 1);
+    const angle = i * GOLDEN_ANGLE + jitter(0.12);
+    const radius = maxRadius * (0.045 + 0.165 * Math.sqrt(t)) + jitter(maxRadius * 0.008);
+    positions.push({
+      x: Math.round(centerX + Math.cos(angle) * radius + jitter(maxRadius * 0.010)),
+      y: Math.round(centerY + Math.sin(angle) * radius * 0.84 + jitter(maxRadius * 0.010))
+    });
+  }
+
+  const basePerArm = Math.floor(remaining / armCount);
+  const remainder = remaining % armCount;
+
+  for (let arm = 0; arm < armCount; arm++) {
+    const count = basePerArm + (arm < remainder ? 1 : 0);
+    const armPhase = jitter(0.09);
+    for (let i = 0; i < count; i++) {
+      const baseT = count <= 1 ? 0.5 : i / (count - 1);
+      const t = Math.max(0, Math.min(1, baseT + jitter(0.010)));
+      const radius = maxRadius * (0.20 + 0.75 * t) + jitter(maxRadius * (0.008 + 0.014 * t));
+      const turns = 1.08;
+      const angle =
+        arm * (2 * Math.PI / armCount) +
+        t * turns * 2 * Math.PI +
+        armPhase +
+        jitter(0.035);
+
+      // Just enough drift to make arms look organic, not enough to scatter planets off the spiral.
+      const armWidth = maxRadius * (0.014 + 0.030 * t);
+      const radialJitter = maxRadius * (0.006 + 0.016 * t);
+
+      positions.push({
+        x: Math.round(
+          centerX +
+          Math.cos(angle) * radius +
+          Math.cos(angle + Math.PI / 2) * jitter(armWidth) +
+          Math.cos(angle) * jitter(radialJitter)
+        ),
+        y: Math.round(
+          centerY +
+          Math.sin(angle) * radius * 0.84 +
+          Math.sin(angle + Math.PI / 2) * jitter(armWidth) +
+          Math.sin(angle) * jitter(radialJitter) * 0.84
+        )
+      });
+    }
+  }
+
+  return spreadApartPositions(positions, centerX, centerY, maxRadius, 58);
+}
+
+function createGalaxyPositions(
+  nodeCount: number,
+  galaxyType: GalaxyType,
+  rings: number,
+  maxRadius: number,
+  centerX: number,
+  centerY: number
+): GalaxyPoint[] {
+  const safeType = galaxyType || 'spiral4';
+
+  if (safeType === 'circular') {
+    return getClassicRingPositions(nodeCount, rings, maxRadius, centerX, centerY);
+  }
+
+  if (safeType === 'ring') {
+    const positions: GalaxyPoint[] = [];
+    const coreCount = Math.max(5, Math.round(nodeCount * 0.14));
+    for (let i = 0; i < coreCount; i++) {
+      const t = coreCount <= 1 ? 0 : i / (coreCount - 1);
+      const angle = i * GOLDEN_ANGLE + jitter(0.08);
+      const radius = maxRadius * (0.05 + 0.17 * Math.sqrt(t)) + jitter(maxRadius * 0.006);
+      positions.push({
+        x: Math.round(centerX + Math.cos(angle) * radius + jitter(maxRadius * 0.008)),
+        y: Math.round(centerY + Math.sin(angle) * radius * 0.80 + jitter(maxRadius * 0.008))
+      });
+    }
+
+    const outerCount = nodeCount - coreCount;
+    for (let i = 0; i < outerCount; i++) {
+      const t = (i + 0.5) / Math.max(1, outerCount);
+      const angle = t * Math.PI * 2 + jitter(0.045);
+      const radius = maxRadius * (0.76 + Math.random() * 0.10);
+      positions.push({
+        x: Math.round(centerX + Math.cos(angle) * radius + jitter(maxRadius * 0.010)),
+        y: Math.round(centerY + Math.sin(angle) * radius * 0.80 + jitter(maxRadius * 0.010))
+      });
+    }
+    return spreadApartPositions(positions, centerX, centerY, maxRadius, 58);
+  }
+
+  if (safeType === 'spiral2') {
+    return createSpiralGalaxyPositions(nodeCount, 2, maxRadius, centerX, centerY);
+  }
+  if (safeType === 'spiral3') {
+    return createSpiralGalaxyPositions(nodeCount, 3, maxRadius, centerX, centerY);
+  }
+
+  // Default to a 4-arm spiral.
+  return createSpiralGalaxyPositions(nodeCount, 4, maxRadius, centerX, centerY);
+}
+
+function getHomeworldTarget(
+  galaxyType: GalaxyType,
+  playerIndex: number,
+  playerCount: number,
+  maxRadius: number,
+  centerX: number,
+  centerY: number
+) {
+  const type = galaxyType || 'spiral4';
+  const angle = (playerIndex * 2 * Math.PI) / Math.max(1, playerCount);
+
+  if (type === 'ring') {
+    return {
+      targetX: centerX + Math.cos(angle) * maxRadius * 0.80,
+      targetY: centerY + Math.sin(angle) * maxRadius * 0.64
+    };
+  }
+
+  if (type === 'circular') {
+    return {
+      targetX: centerX + Math.cos(angle) * maxRadius * 0.56,
+      targetY: centerY + Math.sin(angle) * maxRadius * 0.56
+    };
+  }
+
+  const armCount = type === 'spiral2' ? 2 : type === 'spiral3' ? 3 : 4;
+  const armAngle = (playerIndex % armCount) * (2 * Math.PI / armCount);
+  const layer = Math.floor(playerIndex / armCount);
+  const angleOffset = layer * 0.22;
+  const radius = maxRadius * (0.38 + Math.min(0.18, layer * 0.06));
+  const theta = armAngle + 0.45 * Math.PI + angleOffset;
+
+  return {
+    targetX: centerX + Math.cos(theta) * radius,
+    targetY: centerY + Math.sin(theta) * radius * 0.84
+  };
+}
+
+export function generateMap(nodeCount: number, players: Player[], npcCount: number, galaxyType: GalaxyType = 'spiral4'): StarNode[] {
+  const nodes: StarNode[] = [];
+  const rings = getRingCount(nodeCount);
+  const maxRadius = getMapLayoutRadius(nodeCount);
+  const centerX = 500;
+  const centerY = 500;
+
+  // 1. Place systems by galaxy shape. Bigger maps still expand outward so planet spacing stays open.
+  const positions = createGalaxyPositions(nodeCount, galaxyType, rings, maxRadius, centerX, centerY);
+
+  for (let nameIndex = 0; nameIndex < nodeCount; nameIndex++) {
+    const { x, y } = positions[nameIndex];
+    const name = STAR_NAMES[nameIndex % STAR_NAMES.length] +
+      (nameIndex >= STAR_NAMES.length ? ` ${Math.floor(nameIndex / STAR_NAMES.length) + 1}` : '');
+
+    nodes.push({
+      id: `node-${nameIndex}`,
+      name,
+      x,
+      y,
+      links: [],
+      claimedBy: null,
+      development: 'none',
+      resourceGeneration: 1,
+      hasShipyard: false,
+      hasFtlInhibitor: false,
+      hasGateway: false,
+      ships: [],
+      groundUnits: [],
+      groundUnitsBuiltThisTurn: 0,
+      isNpcPlanet: false,
+      isDysonSphere: false,
+      biome: pickBiome(nameIndex)
+    });
   }
 
   // 2. Establish connections (Delaunay-ish Proximity Connections)
@@ -325,16 +833,12 @@ export function generateMap(nodeCount: number, players: Player[], npcCount: numb
 
   // 3. Set up Player Homeworlds
   // Distribute homeworlds evenly on the middle ring (approx. ring index floor(rings/2))
-  const hwRingIndex = Math.max(0, Math.floor(rings / 3.0));
-  const hwRingRadius = ((hwRingIndex + 1) / rings) * maxRadius;
   const numPlayers = players.length;
 
   const playerHwNodeIds: string[] = [];
 
   for (let pIdx = 0; pIdx < numPlayers; pIdx++) {
-    const hwAngle = (pIdx * 2 * Math.PI) / numPlayers;
-    const targetX = centerX + Math.cos(hwAngle) * hwRingRadius;
-    const targetY = centerY + Math.sin(hwAngle) * hwRingRadius;
+    const { targetX, targetY } = getHomeworldTarget(galaxyType, pIdx, numPlayers, maxRadius, centerX, centerY);
 
     // Find closest node that hasn't been claimed yet
     const candidateNodes = nodes
@@ -670,7 +1174,7 @@ export interface OrbitalBombardmentResult {
 }
 
 export function canBattleshipBombard(node: StarNode, battleship: Ship, playerId: string, state: Pick<GameState, 'alliances'>): boolean {
-  if (battleship.owner !== playerId || battleship.type !== 'BattleShip' || battleship.hp <= 0 || battleship.bombardedThisTurn) return false;
+  if (battleship.owner !== playerId || battleship.type !== 'BattleShip' || battleship.hp <= 0) return false;
   const isHostilePlanet =
     node.isNpcPlanet ||
     (node.isDysonSphere && (node.claimedBy === null || isHostileOwner(state, playerId, node.claimedBy))) ||
@@ -727,7 +1231,7 @@ export function resolveOrbitalBombardment(
     destroyed
       ? `- DESTROYED: Defender ground unit was vaporized from orbit.`
       : `- Defender ground unit HP remaining: ${target.hp}/${target.maxHp}`,
-    `- BattleShip can no longer bombard this turn.`
+    `- BattleShip systems cycling for the next timed action.`
   ];
 
   return {
@@ -819,7 +1323,7 @@ export function loadGroundUnitToCarrier(
   const player = next.players.find(p => p.id === playerId);
   const node = next.nodes.find(n => n.id === nodeId);
   if (!node || !player) return state;
-  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  if (node.claimedBy !== playerId) return state;
 
   const unit = node.groundUnits.find(g => g.id === unitId && g.owner === playerId);
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
@@ -848,7 +1352,7 @@ export function unloadGroundUnitFromCarrier(
   const player = next.players.find(p => p.id === playerId);
   const node = next.nodes.find(n => n.id === nodeId);
   if (!node || !player) return state;
-  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  if (node.claimedBy !== playerId) return state;
 
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
   const unit = carrier?.carriedUnits.find(g => g.id === unitId);
@@ -886,7 +1390,7 @@ export function loadFighterToCarrier(
   const player = next.players.find(p => p.id === playerId);
   const node = next.nodes.find(n => n.id === nodeId);
   if (!node || !player) return state;
-  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  if (node.claimedBy !== playerId) return state;
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
   const fighter = node.ships.find(s => s.id === fighterId && s.type === 'Fighter' && s.owner === playerId);
   if (!carrier || !fighter) return state;
@@ -911,7 +1415,7 @@ export function unloadFighterFromCarrier(
   const player = next.players.find(p => p.id === playerId);
   const node = next.nodes.find(n => n.id === nodeId);
   if (!node || !player) return state;
-  if (node.claimedBy !== playerId || next.phase !== 1 || next.players[next.activePlayerIndex]?.id !== playerId) return state;
+  if (node.claimedBy !== playerId) return state;
   const carrier = node.ships.find(s => s.id === carrierId && s.type === 'Carrier' && s.owner === playerId);
   const fighter = carrier?.carriedFighters.find(f => f.id === fighterId);
   if (!carrier || !fighter) return state;
@@ -954,12 +1458,11 @@ export function invadePlanetWithCarriers(
     return { state, report: [], captured: false, startedGroundCombat: false };
   }
 
-  const isActive = next.players[next.activePlayerIndex]?.id === playerId;
   const enemyCombatShips = node.ships.some(s => s.blocksMovement && isHostileOwner(next, playerId, s.owner));
   const carriers = node.ships.filter(s => s.owner === playerId && s.type === 'Carrier' && s.carriedUnits.length > 0);
   const totalTroops = carriers.reduce((sum, carrier) => sum + carrier.carriedUnits.length, 0);
 
-  if (!isActive || next.phase !== 2 || !canInvadeNode(node, playerId, next) || enemyCombatShips || totalTroops === 0) {
+  if (!canInvadeNode(node, playerId, next) || enemyCombatShips || totalTroops === 0) {
     return { state, report: [], captured: false, startedGroundCombat: false };
   }
 
@@ -1060,9 +1563,8 @@ export function resolveGroundCombatRound(
   const node = next.nodes.find(n => n.id === nodeId);
   if (!node || !player) return null;
 
-  const isActive = next.players[next.activePlayerIndex]?.id === playerId;
   const enemyCombatShips = node.ships.some(s => s.blocksMovement && isHostileOwner(next, playerId, s.owner));
-  if (!isActive || next.phase !== 2 || enemyCombatShips) return null;
+  if (enemyCombatShips) return null;
 
   const attacker = node.groundUnits.find(g => g.id === attackerUnitId && g.owner === playerId);
   const defender = node.groundUnits.find(g => g.id === defenderUnitId && isHostileOwner(next, playerId, g.owner));
@@ -1149,3 +1651,66 @@ export function checkWinCondition(state: GameState): Player | null {
 
   return null;
 }
+export const REALTIME_INCOME_INTERVAL_SECONDS = 20;
+
+export function processRealtimeIncome(state: GameState, nowMs = Date.now()): { state: GameState; changed: boolean } {
+  if (state.status !== 'playing') return { state, changed: false };
+
+  const lastMs = state.realtimeIncomeLastAt
+    ? new Date(state.realtimeIncomeLastAt).getTime()
+    : nowMs;
+  const elapsedSeconds = Math.floor((nowMs - lastMs) / 1000);
+  if (elapsedSeconds < REALTIME_INCOME_INTERVAL_SECONDS) {
+    if (!state.realtimeIncomeLastAt) {
+      return {
+        state: { ...state, realtimeIncomeLastAt: new Date(nowMs).toISOString() },
+        changed: true
+      };
+    }
+    return { state, changed: false };
+  }
+
+  const ticks = Math.min(3, Math.floor(elapsedSeconds / REALTIME_INCOME_INTERVAL_SECONDS));
+  let nodes = state.nodes.map(node => ({
+    ...node,
+    ships: node.ships.map(ship => ({
+      ...ship,
+      carriedUnits: ship.carriedUnits.map(unit => ({ ...unit })),
+      carriedFighters: ship.carriedFighters.map(fighter => ({ ...fighter }))
+    })),
+    groundUnits: node.groundUnits.map(unit => ({ ...unit }))
+  }));
+  const actionLog = [...state.actionLog];
+
+  for (let tick = 0; tick < ticks; tick++) {
+    for (const player of state.players) {
+      actionLog.push(...processHealing(nodes, player.id).map(line => `[REAL TIME] ${line}`));
+    }
+  }
+
+  const players = state.players.map(player => {
+    const fullIncome = nodes.reduce((sum, node) => sum + getEffectiveResourceGeneration(node, player.id), 0);
+    const incomePerTick = Math.max(1, Math.ceil(fullIncome / 2));
+    return { ...player, resources: player.resources + incomePerTick * ticks };
+  });
+
+  if (ticks > 0) {
+    actionLog.push(`[REAL TIME] Sector economy paid out ${ticks} income tick${ticks > 1 ? 's' : ''}.`);
+  }
+
+  return {
+    state: {
+      ...state,
+      nodes,
+      players,
+      actionLog: actionLog.slice(-80),
+      realtimeIncomeLastAt: new Date(lastMs + ticks * REALTIME_INCOME_INTERVAL_SECONDS * 1000).toISOString(),
+      lastAction: 'realtime_income_tick',
+      lastActionAt: new Date(nowMs).toISOString(),
+      lastUpdated: new Date(nowMs).toISOString()
+    },
+    changed: true
+  };
+}
+
+

@@ -9,7 +9,7 @@ import { DiplomacyPanel } from './components/DiplomacyPanel';
 import type { GameState, StarNode, Ship } from './types';
 import { subscribeToRoom, updateRoomState, getDbMode, getGameRoomState } from './services/database';
 import type { DbMode } from './services/database';
-import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration } from './services/gameLogic';
+import { checkWinCondition, getReachableNodes, processHealing, generateMap, resetGroundUnitBuildCounters, getEffectiveResourceGeneration, processRealtimeActions, processRealtimeIncome, getMoveDurationSeconds, createPendingAction, formatSeconds } from './services/gameLogic';
 import { audio } from './services/audio';
 import { createTutorialScenario, TUTORIAL_PLAYER_ID } from './services/tutorialScenarios';
 import type { TutorialScenarioId } from './services/tutorialScenarios';
@@ -91,6 +91,9 @@ export const App: React.FC = () => {
   const roomUnsubRef = useRef<(() => void) | null>(null);
   const turnNoticeRef = useRef<string | null>(null);
   const [showTurnOverlay, setShowTurnOverlay] = useState(false);
+  const realtimeTickRef = useRef(false);
+  const previousMyResourcesRef = useRef<number | null>(null);
+  const [incomePops, setIncomePops] = useState<{ id: string; amount: number }[]>([]);
 
   // Fog of war setting
   const [fogOfWar, setFogOfWar] = useState(false);
@@ -177,23 +180,12 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Notify the local player when their turn begins.
+  // Fully real-time mode: no player turn notification overlay.
   useEffect(() => {
     if (!gameState || gameState.status !== 'playing' || view === 'lobby') return;
-
-    const active = gameState.players[gameState.activePlayerIndex];
-    const marker = `${gameState.roomId}:${gameState.turnNumber}:${gameState.activePlayerIndex}`;
-
-    if (turnNoticeRef.current === marker) return;
-    turnNoticeRef.current = marker;
-
-    if (active?.id === myPlayerId) {
-      setShowTurnOverlay(true);
-      audio.playTurnDing();
-    } else {
-      setShowTurnOverlay(false);
-    }
-  }, [gameState?.roomId, gameState?.turnNumber, gameState?.activePlayerIndex, gameState?.status, myPlayerId, view]);
+    turnNoticeRef.current = `${gameState.roomId}:realtime`;
+    setShowTurnOverlay(false);
+  }, [gameState?.roomId, gameState?.status, view]);
 
   // Update reachable nodes when ship is selected
   useEffect(() => {
@@ -205,25 +197,67 @@ export const App: React.FC = () => {
     setReachableNodes(range);
   }, [selectedShip, selectedNode, gameState, myPlayerId]);
 
-  // Spectators should automatically see the live combat panel when the active player commits combat.
+  // In real-time mode, open the latest combat system for all players when combat happens.
   useEffect(() => {
-    if (!gameState || gameState.status !== 'playing' || gameState.phase !== 2 || !gameState.activeCombatNodeId) return;
-    const active = gameState.players[gameState.activePlayerIndex];
-    if (active?.id === myPlayerId) return;
+    if (!gameState || gameState.status !== 'playing' || !gameState.activeCombatNodeId) return;
     const combatNode = gameState.nodes.find(n => n.id === gameState.activeCombatNodeId);
     if (combatNode) {
       setSelectedNode(combatNode);
       setSelectedShip(null);
     }
-  }, [gameState?.activeCombatNodeId, gameState?.activeCombatUpdatedAt, gameState?.phase, gameState?.status, myPlayerId]);
+  }, [gameState?.activeCombatNodeId, gameState?.activeCombatUpdatedAt, gameState?.status]);
+
+
+  // Real-time action processor: orders complete and all empires receive timed income automatically.
+  useEffect(() => {
+    if (!gameState || gameState.status !== 'playing' || realtimeTickRef.current) return;
+
+    const tick = async () => {
+      if (realtimeTickRef.current || !gameState) return;
+      const actionResult = processRealtimeActions(gameState);
+      const incomeResult = processRealtimeIncome(actionResult.state);
+      const nextState = incomeResult.state;
+      if (!actionResult.changed && !incomeResult.changed) return;
+      realtimeTickRef.current = true;
+      try {
+        setGameState(nextState);
+        refreshSelectionsFromState(nextState);
+        if (!isTutorialMode) {
+          await updateRoomState(currentCode, nextState);
+        }
+      } finally {
+        realtimeTickRef.current = false;
+      }
+    };
+
+    const interval = window.setInterval(tick, 1000);
+    void tick();
+    return () => window.clearInterval(interval);
+  }, [gameState, currentCode, isTutorialMode]);
+
+
+  useEffect(() => {
+    const currentResources = gameState?.players.find(p => p.id === myPlayerId)?.resources;
+    if (currentResources === undefined) return;
+    const previousResources = previousMyResourcesRef.current;
+    previousMyResourcesRef.current = currentResources;
+    if (previousResources === null || currentResources <= previousResources) return;
+
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const amount = currentResources - previousResources;
+    setIncomePops(pops => [...pops, { id, amount }].slice(-4));
+    window.setTimeout(() => {
+      setIncomePops(pops => pops.filter(pop => pop.id !== id));
+    }, 1800);
+  }, [gameState?.players, myPlayerId]);
 
   // Handle ship movement — NO auto-colonize; colony ships must use action in phase 2
   const handleMoveShip = async (targetNodeId: string) => {
     if (!gameState || !selectedShip) return;
     
-    // Find the node where this ship actually resides to prevent duplication
     const startNode = gameState.nodes.find(n => n.ships.some(s => s.id === selectedShip.id));
-    if (!startNode) return;
+    const targetNode = gameState.nodes.find(n => n.id === targetNodeId);
+    if (!startNode || !targetNode) return;
 
     if (reachableNodes[targetNodeId] === undefined) {
       audio.playBeep(160, 0.08);
@@ -232,20 +266,30 @@ export const App: React.FC = () => {
 
     audio.playMove();
     const costInMoves = reachableNodes[targetNodeId];
+    const durationSeconds = getMoveDurationSeconds(startNode, targetNode, costInMoves);
+    const travelingShip: Ship = {
+      ...selectedShip,
+      movesLeft: selectedShip.movesLeft,
+      turnsInTerritory: 0,
+      lastNodeId: startNode.id,
+      inTransit: true,
+      transitToNodeId: targetNodeId
+    };
+
+    const pendingAction = createPendingAction({
+      type: 'move_ship',
+      playerId: myPlayerId,
+      nodeId: startNode.id,
+      targetNodeId,
+      shipId: selectedShip.id,
+      ship: travelingShip,
+      durationSeconds,
+      label: `${selectedShip.type} ${startNode.name} → ${targetNode.name}`
+    });
 
     const updatedNodes = gameState.nodes.map(n => {
       if (n.id === startNode.id) {
         return { ...n, ships: n.ships.filter(s => s.id !== selectedShip.id) };
-      }
-      if (n.id === targetNodeId) {
-        const movedShip: Ship = {
-          ...selectedShip,
-          movesLeft: Math.max(0, selectedShip.movesLeft - costInMoves),
-          turnsInTerritory: 0,
-          lastNodeId: startNode.id
-        };
-        // NOTE: NO auto-claim here. Colony ships must be used during action phase (phase 2).
-        return { ...n, ships: [...n.ships, movedShip] };
       }
       return n;
     });
@@ -253,14 +297,14 @@ export const App: React.FC = () => {
     const updatedState: GameState = {
       ...gameState,
       nodes: updatedNodes,
+      pendingActions: [...(gameState.pendingActions || []), pendingAction],
       actionLog: [
         ...gameState.actionLog,
-        `${gameState.players.find(p => p.id === myPlayerId)?.name}: Moved ${selectedShip.type} to ${
-          gameState.nodes.find(n => n.id === targetNodeId)?.name
-        } (cost: ${costInMoves})`
+        `${gameState.players.find(p => p.id === myPlayerId)?.name}: ${selectedShip.type} departed ${startNode.name} for ${targetNode.name}; ETA ${formatSeconds(durationSeconds)}.`
       ],
-      lastAction: 'move_ship',
-      lastActionAt: new Date().toISOString()
+      lastAction: 'queue_ship_move',
+      lastActionAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
     };
 
     setSelectedShip(null);
@@ -359,7 +403,8 @@ export const App: React.FC = () => {
       actionLog: ['=== REMATCH: Galaxy Map Re-seeded ==='],
       winnerId: null, lastUpdated: new Date().toISOString(),
       activeCombatNodeId: null,
-      activeCombatSummary: undefined
+      activeCombatSummary: undefined,
+      pendingActions: []
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
@@ -376,7 +421,8 @@ export const App: React.FC = () => {
       players: gameState.players.map(p => ({ ...p, ready: p.id === myPlayerId, homeworldId: '' })),
       nodes: [], winnerId: null, actionLog: ['Game ended. Returned to lobby.'],
       activeCombatNodeId: null,
-      activeCombatSummary: undefined
+      activeCombatSummary: undefined,
+      pendingActions: []
     };
     setSelectedNode(null); setSelectedShip(null);
     setGameState(updatedState);
@@ -393,11 +439,6 @@ export const App: React.FC = () => {
 
   const handleUpdateGameState = async (updatedState: GameState) => {
     if (!gameState) return;
-    const active = gameState.players[gameState.activePlayerIndex];
-    if (gameState.status === 'playing' && active?.id !== myPlayerId) {
-      audio.playBeep(160, 0.08);
-      return;
-    }
     const stamped: GameState = {
       ...updatedState,
       lastUpdated: new Date().toISOString(),
@@ -435,8 +476,9 @@ export const App: React.FC = () => {
   }
 
   // ───── GAME VIEW ─────
-  const activePlayer = gameState.players[gameState.activePlayerIndex];
-  const isMyActiveTurn = activePlayer.id === myPlayerId;
+  const activePlayer = gameState.players[gameState.activePlayerIndex] || gameState.players[0];
+  const isMyActiveTurn = true;
+  const realTimeMode = true;
   const me = gameState.players.find(p => p.id === myPlayerId);
 
   const phaseNames = ['BUILD', 'MOVEMENT', 'ACTION'];
@@ -483,19 +525,19 @@ export const App: React.FC = () => {
                 CONQUERERZ II
               </span>
               <div className="flex flex-col justify-center">
-                <span className="text-[8px] text-slate-500 font-mono uppercase tracking-widest leading-none">Turn</span>
+                <span className="text-[8px] text-slate-500 font-mono uppercase tracking-widest leading-none">Session</span>
                 <span className="text-base font-bold text-slate-200 font-mono leading-tight">#{gameState.turnNumber}</span>
               </div>
               <div className={`flex flex-col justify-center px-2 py-0.5 border rounded text-center ${phaseColors[gameState.phase]}`}>
-                <span className="text-[7px] opacity-60 leading-none uppercase tracking-wider">Phase</span>
-                <span className="text-[10px] font-extrabold tracking-wider leading-tight">{phaseNames[gameState.phase]}</span>
+                <span className="text-[7px] opacity-60 leading-none uppercase tracking-wider">Mode</span>
+                <span className="text-[10px] font-extrabold tracking-wider leading-tight">REAL TIME</span>
               </div>
             </div>
 
             {/* CENTER: Stellaris resource bar */}
             <div className="flex-1 flex items-center px-4 overflow-x-auto gap-6 border-r border-slate-700/50">
               {/* Credits (Energy Credits) */}
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="relative flex items-center gap-2 shrink-0">
                 <CreditsHudIcon />
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider leading-none">Credits</span>
@@ -503,6 +545,17 @@ export const App: React.FC = () => {
                     <span className="text-sm font-bold text-amber-400 font-mono leading-none">{me?.resources}R</span>
                     <span className="text-[10px] text-emerald-400 font-bold font-mono leading-none">+{myYield}</span>
                   </div>
+                </div>
+                <div className="pointer-events-none absolute -right-2 -top-4 flex flex-col items-end gap-0.5">
+                  {incomePops.map((pop, idx) => (
+                    <span
+                      key={pop.id}
+                      className="animate-bounce rounded border border-emerald-400/50 bg-emerald-950/80 px-1.5 py-0.5 text-[10px] font-black text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.35)]"
+                      style={{ transform: `translateY(${-idx * 10}px)` }}
+                    >
+                      +{pop.amount}R
+                    </span>
+                  ))}
                 </div>
               </div>
 
@@ -537,8 +590,8 @@ export const App: React.FC = () => {
             {/* RIGHT: Active Turn + compact multiplayer slots */}
             <div className="flex items-center px-4 gap-3 shrink-0">
               <div className="flex items-center gap-1.5 overflow-x-auto">
-                {gameState.players.map((player, idx) => {
-                  const isActive = idx === gameState.activePlayerIndex;
+                {gameState.players.map((player) => {
+                  const isActive = player.id === myPlayerId;
                   const isMe = player.id === myPlayerId;
                   const pColor = playerColorMap[player.color];
                   return (
@@ -553,7 +606,7 @@ export const App: React.FC = () => {
                         borderColor: isActive ? pColor : undefined,
                         boxShadow: isActive ? `0 0 8px ${pColor}30` : undefined,
                       }}
-                      title={`${player.name}${isMe ? ' (You)' : ''}${isActive ? " — Active Turn" : ""}`}
+                      title={`${player.name}${isMe ? ' (You)' : ''}${isMe ? " — You" : ""}`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
                         style={{
@@ -632,7 +685,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Waiting for turn — persistent top banner */}
-        {!isMyActiveTurn && gameState.status === 'playing' && (
+        {!realTimeMode && !isMyActiveTurn && gameState.status === 'playing' && (
           <div className="absolute top-0 left-0 right-0 z-20 bg-slate-900/90 backdrop-blur-sm border-t border-slate-700/60 px-4 py-2 flex items-center justify-between animate-fadeIn">
             <div className="flex items-center gap-3">
               <div className="w-2 h-2 rounded-full animate-ping" style={{ background: playerColorMap[activePlayer.color] }} />
@@ -652,7 +705,7 @@ export const App: React.FC = () => {
       <ChatPanel code={currentCode} gameState={gameState} myPlayerId={myPlayerId} />
 
       {/* ═══ 4. NEXT PHASE BUTTON (fixed bottom-right when it's my turn) ═══ */}
-      {isMyActiveTurn && gameState.status === 'playing' && (
+      {!realTimeMode && isMyActiveTurn && gameState.status === 'playing' && (
         <div className="fixed bottom-4 right-44 z-40">
           <button
             onClick={handleNextPhase}
@@ -667,7 +720,7 @@ export const App: React.FC = () => {
       )}
 
       {/* ═══ TURN NOTIFICATION OVERLAY ═══ */}
-      {showTurnOverlay && isMyActiveTurn && gameState.status === 'playing' && (
+      {!realTimeMode && showTurnOverlay && isMyActiveTurn && gameState.status === 'playing' && (
         <div
           onClick={() => setShowTurnOverlay(false)}
           className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/72 backdrop-blur-sm cursor-pointer animate-fadeIn"
@@ -700,7 +753,7 @@ export const App: React.FC = () => {
           onSelectShip={setSelectedShip}
           onUpdateState={handleUpdateGameState}
           onClose={() => { setSelectedNode(null); setSelectedShip(null); }}
-          forceCombatTab={gameState.phase === 2 && gameState.activeCombatNodeId === selectedNode.id}
+          forceCombatTab={gameState.activeCombatNodeId === selectedNode.id}
         />
       )}
 

@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameState, PlanetBiome, Ship, StarNode } from '../types';
 import { usePanZoom } from '../hooks/usePanZoom';
 import { audio } from '../services/audio';
+import { getMapLayoutRadius } from '../services/gameLogic';
 
 interface MapProps {
   gameState: GameState;
@@ -255,70 +256,81 @@ const GalaxyBackdrop: React.FC<{ panX: number; panY: number; scale: number }> = 
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full pointer-events-none" />;
 };
 
-const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> = ({ type, color, size = 7 }) => {
-  const s = size;
-  const common = {
-    filter: 'url(#ship-shadow)',
-  } as React.SVGProps<SVGGElement>;
 
-  switch (type) {
-    case 'Destroyer':
-      return (
-        <g {...common}>
-          <path d={`M0 ${-s} L${s * 0.6} ${s * 0.58} L0 ${s * 0.18} L${-s * 0.6} ${s * 0.58} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
-          <path d={`M0 ${-s * 0.9} L${s * 0.42} ${s * 0.46} L0 ${s * 0.12} L${-s * 0.42} ${s * 0.46} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
-          <path d={`M0 ${-s * 0.62} L${s * 0.12} ${-s * 0.05} L0 ${s * 0.12} L${-s * 0.12} ${-s * 0.05} Z`} fill="#ffffff" opacity="0.55" />
-        </g>
-      );
-    case 'BattleShip':
-      return (
-        <g {...common}>
-          <path d={`M0 ${-s} L${s * 0.82} ${s * 0.64} L${s * 0.24} ${s * 0.3} L${-s * 0.24} ${s * 0.3} L${-s * 0.82} ${s * 0.64} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
-          <path d={`M0 ${-s * 0.9} L${s * 0.6} ${s * 0.52} L${s * 0.14} ${s * 0.18} L${-s * 0.14} ${s * 0.18} L${-s * 0.6} ${s * 0.52} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
-          <rect x={-s * 0.1} y={-s * 0.55} width={s * 0.2} height={s * 0.65} rx="0.7" fill="#ffffff" opacity="0.42" />
-        </g>
-      );
-    case 'Carrier':
-      return (
-        <g {...common}>
-          <path d={`M${-s * 0.78} ${s * 0.4} L${-s * 0.55} ${-s * 0.16} L0 ${-s * 0.9} L${s * 0.55} ${-s * 0.16} L${s * 0.78} ${s * 0.4} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
-          <path d={`M${-s * 0.58} ${s * 0.26} L${-s * 0.4} ${-s * 0.08} L0 ${-s * 0.68} L${s * 0.4} ${-s * 0.08} L${s * 0.58} ${s * 0.26} Z`} fill={color} stroke="#0f172a" strokeWidth="0.35" />
-          <path d={`M${-s * 0.28} ${-s * 0.02} L0 ${-s * 0.43} L${s * 0.28} ${-s * 0.02}`} stroke="#fff" strokeWidth="0.55" fill="none" opacity="0.55" />
-        </g>
-      );
-    case 'ColonyShip':
-      return (
-        <g {...common}>
-          <ellipse rx={s * 0.72} ry={s * 0.52} fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
-          <ellipse rx={s * 0.55} ry={s * 0.38} fill={color} stroke="#0f172a" strokeWidth="0.3" />
-          <path d={`M${-s * 0.22} ${s * 0.35} L0 ${s * 0.82} L${s * 0.22} ${s * 0.35}`} fill={color} stroke="#0f172a" strokeWidth="0.25" />
-          <circle r={s * 0.18} fill="#fff" opacity="0.38" />
-        </g>
-      );
-    case 'Fighter':
-      return (
-        <g {...common}>
-          <path d={`M0 ${-s * 0.78} L${s * 0.34} ${s * 0.56} L0 ${s * 0.12} L${-s * 0.34} ${s * 0.56} Z`} fill="#020617" stroke="#e5f5ff" strokeWidth="0.8" />
-          <path d={`M0 ${-s * 0.62} L${s * 0.2} ${s * 0.42} L0 ${s * 0.06} L${-s * 0.2} ${s * 0.42} Z`} fill={color} />
-        </g>
-      );
-    default:
-      return <circle r={s * 0.5} fill={color} />;
-  }
-};
+const svgSpriteCache = new globalThis.Map<string, string>();
 
-const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ development, color }) => {
-  if (development === 'none') return null;
+function svgToDataUri(svg: string) {
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function getCachedSvgSprite(key: string, svg: string) {
+  const existing = svgSpriteCache.get(key);
+  if (existing) return existing;
+  const uri = svgToDataUri(svg);
+  svgSpriteCache.set(key, uri);
+  return uri;
+}
+
+const ShipSpriteDefs: React.FC = () => (
+  <>
+    <symbol id="ship-sprite-Destroyer" viewBox="-14 -14 28 28">
+      <path d="M0 -7 L4.2 4.06 L0 1.26 L-4.2 4.06 Z" fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+      <path d="M0 -6.3 L2.94 3.22 L0 0.84 L-2.94 3.22 Z" fill="currentColor" stroke="#0f172a" strokeWidth="0.35" />
+      <path d="M0 -4.34 L0.84 -0.35 L0 0.84 L-0.84 -0.35 Z" fill="#ffffff" opacity="0.55" />
+    </symbol>
+
+    <symbol id="ship-sprite-BattleShip" viewBox="-14 -14 28 28">
+      <path d="M0 -7 L5.74 4.48 L1.68 2.1 L-1.68 2.1 L-5.74 4.48 Z" fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+      <path d="M0 -6.3 L4.2 3.64 L0.98 1.26 L-0.98 1.26 L-4.2 3.64 Z" fill="currentColor" stroke="#0f172a" strokeWidth="0.35" />
+      <rect x="-0.7" y="-3.85" width="1.4" height="4.55" rx="0.7" fill="#ffffff" opacity="0.42" />
+    </symbol>
+
+    <symbol id="ship-sprite-Carrier" viewBox="-14 -14 28 28">
+      <path d="M-5.46 2.8 L-3.85 -1.12 L0 -6.3 L3.85 -1.12 L5.46 2.8 Z" fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+      <path d="M-4.06 1.82 L-2.8 -0.56 L0 -4.76 L2.8 -0.56 L4.06 1.82 Z" fill="currentColor" stroke="#0f172a" strokeWidth="0.35" />
+      <path d="M-1.96 -0.14 L0 -3.01 L1.96 -0.14" stroke="#fff" strokeWidth="0.55" fill="none" opacity="0.55" />
+    </symbol>
+
+    <symbol id="ship-sprite-ColonyShip" viewBox="-14 -14 28 28">
+      <ellipse rx="5.04" ry="3.64" fill="#020617" stroke="#e5f5ff" strokeWidth="1.1" />
+      <ellipse rx="3.85" ry="2.66" fill="currentColor" stroke="#0f172a" strokeWidth="0.3" />
+      <path d="M-1.54 2.45 L0 5.74 L1.54 2.45" fill="currentColor" stroke="#0f172a" strokeWidth="0.25" />
+      <circle r="1.26" fill="#fff" opacity="0.38" />
+    </symbol>
+
+    <symbol id="ship-sprite-Fighter" viewBox="-14 -14 28 28">
+      <path d="M0 -5.46 L2.38 3.92 L0 0.84 L-2.38 3.92 Z" fill="#020617" stroke="#e5f5ff" strokeWidth="0.8" />
+      <path d="M0 -4.34 L1.4 2.94 L0 0.42 L-1.4 2.94 Z" fill="currentColor" />
+    </symbol>
+
+    <symbol id="ground-soldier-sprite" viewBox="-16 -12 32 24">
+      <ellipse cx="0" cy="9" rx="11" ry="2.4" fill="#020617" opacity="0.5" />
+      <path d="M-11 2.4 L-8.8 -2 H-2.4 L-1 -4.2 H3.6 L5.6 -1.8 H8.2 L12 1.6 L11 4.2 H8.2 L5.4 7.1 H-7.8 L-11 2.4 Z"
+        fill="currentColor" stroke="#020617" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M-4.2 -4.2 H5.1 C6.2 -4.2 7 -3.3 7 -2.2 V0.2 H-5.6 V-2.8 C-5.6 -3.6 -5 -4.2 -4.2 -4.2 Z"
+        fill="currentColor" stroke="#020617" strokeWidth="1.1" strokeLinejoin="round" />
+      <rect x="4.5" y="-2.5" width="11.3" height="2.1" rx="0.9" fill="currentColor" stroke="#020617" strokeWidth="0.8" />
+      <rect x="-1.2" y="-5.8" width="2.4" height="2" rx="0.5" fill="#e5f5ff" opacity="0.8" />
+      <rect x="6.6" y="-4.8" width="0.8" height="5.5" rx="0.3" fill="#e5f5ff" opacity="0.7" />
+      <circle cx="6.9" cy="-5.1" r="0.9" fill="#e5f5ff" opacity="0.8" />
+      <path d="M-10.2 4.3 H10.2" stroke="#e0f2fe" strokeWidth="0.85" strokeLinecap="round" opacity="0.65" />
+      <path d="M-9.3 5.4 H-1.8 M2.1 5.4 H8.7" stroke="#ffffff" strokeWidth="0.7" strokeLinecap="round" opacity="0.45" />
+    </symbol>
+  </>
+);
+
+function developmentSpriteMarkup(development: StarNode['development'], color: string) {
+  if (development === 'none') return '';
   if (development === 'colony') {
-    return (
-      <g opacity="0.96" filter="url(#structure-shadow)">
+    return `
+      <g opacity="0.96">
         <ellipse cx="0" cy="5.5" rx="7" ry="2" fill="rgba(2,6,23,0.45)" />
-        <path d="M-6,4 A6,6 0 0,1 6,4" fill="none" stroke={color} strokeWidth="1.2" />
-        <line x1="-7" y1="4" x2="7" y2="4" stroke={color} strokeWidth="1" />
-        <line x1="0" y1="4" x2="0" y2="-2" stroke={color} strokeWidth="0.9" />
-        <circle cx="0" cy="-2.5" r="0.9" fill={color} />
+        <path d="M-6,4 A6,6 0 0,1 6,4" fill="none" stroke="${color}" stroke-width="1.2" />
+        <line x1="-7" y1="4" x2="7" y2="4" stroke="${color}" stroke-width="1" />
+        <line x1="0" y1="4" x2="0" y2="-2" stroke="${color}" stroke-width="0.9" />
+        <circle cx="0" cy="-2.5" r="0.9" fill="${color}" />
       </g>
-    );
+    `;
   }
 
   const stroke = '#0ea5e9';
@@ -326,79 +338,179 @@ const DevelopmentIcon: React.FC<{ development: string; color: string }> = ({ dev
   const shadow = 'rgba(2,6,23,0.48)';
 
   if (development === 'arcology') {
-    return (
-      <g filter="url(#structure-shadow)" opacity="0.98">
-        <ellipse cx="0" cy="6.2" rx="11" ry="2.2" fill={shadow} />
-        <path d="M-10,5 A10,10 0 0,1 10,5" fill="rgba(190,242,100,0.34)" stroke="#67e8f9" strokeWidth="1.4" />
-        <path d="M-7,5 A7,7 0 0,1 7,5" fill="none" stroke="#bef264" strokeWidth="0.9" opacity="0.8" />
-        <rect x="-1.6" y="-7.5" width="3.2" height="12.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
-        <rect x="-6.5" y="-1.5" width="3.4" height="6.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
-        <rect x="3.1" y="-1.5" width="3.4" height="6.5" rx="0.5" fill={fill} stroke={stroke} strokeWidth="1" />
+    return `
+      <g opacity="0.98">
+        <ellipse cx="0" cy="6.2" rx="11" ry="2.2" fill="${shadow}" />
+        <path d="M-10,5 A10,10 0 0,1 10,5" fill="rgba(190,242,100,0.34)" stroke="#67e8f9" stroke-width="1.4" />
+        <path d="M-7,5 A7,7 0 0,1 7,5" fill="none" stroke="#bef264" stroke-width="0.9" opacity="0.8" />
+        <rect x="-1.6" y="-7.5" width="3.2" height="12.5" rx="0.5" fill="${fill}" stroke="${stroke}" stroke-width="1" />
+        <rect x="-6.5" y="-1.5" width="3.4" height="6.5" rx="0.5" fill="${fill}" stroke="${stroke}" stroke-width="1" />
+        <rect x="3.1" y="-1.5" width="3.4" height="6.5" rx="0.5" fill="${fill}" stroke="${stroke}" stroke-width="1" />
         <circle cx="0" cy="-2" r="1.3" fill="#ffffff" opacity="0.55" />
       </g>
-    );
+    `;
   }
 
   if (development === 'coreworld') {
-    return (
-      <g filter="url(#structure-shadow)" opacity="0.99">
-        <ellipse cx="0" cy="6.5" rx="12" ry="2.4" fill={shadow} />
-        <path d="M-11,5.5 A11,11 0 0,1 11,5.5" fill="rgba(253,230,138,0.28)" stroke="#fde68a" strokeWidth="1.5" />
-        <path d="M-8,5.4 A8,8 0 0,1 8,5.4" fill="none" stroke="#38bdf8" strokeWidth="0.9" opacity="0.9" />
-        <path d="M0,-11 L3.4,-6.5 L3.4,5 L-3.4,5 L-3.4,-6.5 Z" fill="rgba(250,204,21,0.86)" stroke="#fde68a" strokeWidth="1" />
-        <rect x="-8.5" y="-1" width="3.3" height="6" rx="0.4" fill={fill} stroke={stroke} strokeWidth="0.9" />
-        <rect x="5.2" y="-1" width="3.3" height="6" rx="0.4" fill={fill} stroke={stroke} strokeWidth="0.9" />
+    return `
+      <g opacity="0.99">
+        <ellipse cx="0" cy="6.5" rx="12" ry="2.4" fill="${shadow}" />
+        <path d="M-11,5.5 A11,11 0 0,1 11,5.5" fill="rgba(253,230,138,0.28)" stroke="#fde68a" stroke-width="1.5" />
+        <path d="M-8,5.4 A8,8 0 0,1 8,5.4" fill="none" stroke="#38bdf8" stroke-width="0.9" opacity="0.9" />
+        <path d="M0,-11 L3.4,-6.5 L3.4,5 L-3.4,5 L-3.4,-6.5 Z" fill="rgba(250,204,21,0.86)" stroke="#fde68a" stroke-width="1" />
+        <rect x="-8.5" y="-1" width="3.3" height="6" rx="0.4" fill="${fill}" stroke="${stroke}" stroke-width="0.9" />
+        <rect x="5.2" y="-1" width="3.3" height="6" rx="0.4" fill="${fill}" stroke="${stroke}" stroke-width="0.9" />
         <circle cx="0" cy="-4.5" r="1.4" fill="#ffffff" opacity="0.65" />
       </g>
-    );
+    `;
   }
 
-  const iconScale: Record<string, number> = {
-    city: 0.84,
-    metropolis: 0.95,
-  };
-  const scale = iconScale[development] ?? 0.9;
+  const scale = development === 'metropolis' ? 0.95 : 0.84;
+  const buildings = development === 'metropolis'
+    ? [[-9, -1, 3.4, 7], [-5, -6, 3.6, 12], [-0.6, -9, 4.2, 15], [4.3, -4, 4, 10], [8.8, -2, 3, 8]]
+    : [[-8, -2, 4, 8], [-3, -6, 4, 12], [2, -4, 5, 10]];
 
-  const buildings = {
-    city: [
-      [-8, -2, 4, 8],
-      [-3, -6, 4, 12],
-      [2, -4, 5, 10],
-    ],
-    metropolis: [
-      [-9, -1, 3.4, 7],
-      [-5, -6, 3.6, 12],
-      [-0.6, -9, 4.2, 15],
-      [4.3, -4, 4, 10],
-      [8.8, -2, 3, 8],
-    ],
-  } as Record<string, number[][]>;
-
-  return (
-    <g transform={`scale(${scale})`} filter="url(#structure-shadow)" opacity="0.98">
-      <line x1="-12" y1="6.4" x2="12" y2="6.4" stroke={stroke} strokeWidth="1.3" strokeLinecap="round" />
-      {(buildings[development] ?? buildings.city).map(([x, y, w, h], idx) => (
-        <g key={`${development}-${idx}`}>
-          <rect x={x + 0.9} y={y + 1} width={w} height={h} rx="0.5" fill={shadow} stroke="none" />
-          <rect x={x} y={y} width={w} height={h} rx="0.5" fill={fill} stroke={stroke} strokeWidth="1.1" />
-          {Array.from({ length: Math.max(1, Math.floor(h / 4)) }).map((_, row) => (
-            <line
-              key={`${idx}-win-${row}`}
-              x1={x + w * 0.32}
-              x2={x + w * 0.68}
-              y1={y + 2.6 + row * 3.1}
-              y2={y + 2.6 + row * 3.1}
-              stroke={stroke}
-              strokeWidth="0.55"
-              opacity="0.85"
-            />
-          ))}
-        </g>
-      ))}
+  return `
+    <g transform="scale(${scale})" opacity="0.98">
+      <line x1="-12" y1="6.4" x2="12" y2="6.4" stroke="${stroke}" stroke-width="1.3" stroke-linecap="round" />
+      ${
+        buildings.map(([x, y, w, h]) => `
+          <g>
+            <rect x="${x + 0.9}" y="${y + 1}" width="${w}" height="${h}" rx="0.5" fill="${shadow}" stroke="none" />
+            <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="0.5" fill="${fill}" stroke="${stroke}" stroke-width="1.1" />
+            ${
+              Array.from({ length: Math.max(1, Math.floor(h / 4)) }).map((_, row) => `
+                <line x1="${x + w * 0.32}" x2="${x + w * 0.68}" y1="${y + 2.6 + row * 3.1}" y2="${y + 2.6 + row * 3.1}" stroke="${stroke}" stroke-width="0.55" opacity="0.85" />
+              `).join('')
+            }
+          </g>
+        `).join('')
+      }
     </g>
-  );
-};
+  `;
+}
 
+function planetSpriteMarkup(node: StarNode, radius: number, isSelected: boolean, claimedColor?: string | null) {
+  const biome = getBiome(node);
+  const palette = getBiomePalette(biome);
+  const gradientId = `planet-grad-${node.id}-${radius}`;
+  const clipId = `planet-clip-${node.id}-${radius}`;
+  const surfaceId = `planet-surface-${node.id}-${radius}`;
+  const pad = 24;
+  const size = radius * 2 + pad * 2;
+  const c = radius + pad;
+  const developmentColors: Record<string, string> = {
+    colony: '#a3e635',
+    city: '#93c5fd',
+    metropolis: '#c084fc',
+    arcology: '#67e8f9',
+    coreworld: '#fde68a',
+  };
+  const devMarkup = !node.isDysonSphere && node.development !== 'none'
+    ? `<g transform="translate(${c}, ${c + radius * 0.15})">${developmentSpriteMarkup(node.development, developmentColors[node.development] ?? palette.city)}</g>`
+    : '';
+
+  const surfaceDetail = biome === 'gas'
+    ? `
+      <ellipse cx="${c - 1}" cy="${c - 7}" rx="${radius * 1.05}" ry="${radius * 0.2}" fill="${palette.accent}" opacity="0.45" />
+      <ellipse cx="${c + 1}" cy="${c - 1}" rx="${radius * 1.05}" ry="${radius * 0.17}" fill="${palette.secondary}" opacity="0.45" />
+      <ellipse cx="${c}" cy="${c + 6}" rx="${radius * 1.05}" ry="${radius * 0.2}" fill="${palette.base}" opacity="0.35" />
+      <path d="M${c - radius} ${c + radius * 0.1} Q${c} ${c - radius * 0.2} ${c + radius} ${c + radius * 0.1}" stroke="${palette.cloud}" stroke-width="1.2" opacity="0.3" fill="none" />
+    `
+    : `
+      <ellipse cx="${c - radius * 0.2}" cy="${c - radius * 0.18}" rx="${radius * 0.5}" ry="${radius * 0.24}" fill="${palette.secondary}" opacity="0.58" transform="rotate(-18 ${c} ${c})" />
+      <ellipse cx="${c + radius * 0.24}" cy="${c + radius * 0.12}" rx="${radius * 0.38}" ry="${radius * 0.19}" fill="${palette.base}" opacity="0.42" transform="rotate(24 ${c} ${c})" />
+      <ellipse cx="${c - radius * 0.34}" cy="${c + radius * 0.28}" rx="${radius * 0.22}" ry="${radius * 0.14}" fill="${palette.accent}" opacity="0.34" transform="rotate(-10 ${c} ${c})" />
+      ${
+        ['ocean', 'tropical', 'continental', 'savannah', 'tundra'].includes(biome)
+          ? `
+            <path d="M${c - radius * 0.85} ${c - radius * 0.1} Q${c - radius * 0.2} ${c - radius * 0.55} ${c + radius * 0.25} ${c - radius * 0.18} Q${c + radius * 0.45} ${c + radius * 0.05} ${c + radius * 0.8} ${c - radius * 0.2}" stroke="${palette.cloud}" stroke-width="1.1" opacity="0.38" fill="none" />
+            <path d="M${c - radius * 0.7} ${c + radius * 0.38} Q${c} ${c + radius * 0.15} ${c + radius * 0.55} ${c + radius * 0.42}" stroke="${palette.cloud}" stroke-width="0.9" opacity="0.28" fill="none" />
+          `
+          : ''
+      }
+      ${
+        biome === 'desert'
+          ? `
+            <path d="M${c - radius * 0.95} ${c - radius * 0.25} Q${c - radius * 0.2} ${c - radius * 0.42} ${c + radius * 0.7} ${c - radius * 0.2}" stroke="${palette.accent}" stroke-width="1" opacity="0.35" fill="none" />
+            <path d="M${c - radius * 0.8} ${c + radius * 0.25} Q${c} ${c} ${c + radius * 0.8} ${c + radius * 0.25}" stroke="${palette.accent}" stroke-width="0.9" opacity="0.25" fill="none" />
+          `
+          : ''
+      }
+      ${biome === 'arid' ? `<ellipse cx="${c + radius * 0.18}" cy="${c - radius * 0.14}" rx="${radius * 0.62}" ry="${radius * 0.12}" fill="${palette.accent}" opacity="0.22" transform="rotate(-24 ${c} ${c})" />` : ''}
+      ${biome === 'arctic' ? `<ellipse cx="${c - radius * 0.08}" cy="${c - radius * 0.08}" rx="${radius * 0.75}" ry="${radius * 0.5}" fill="#ffffff" opacity="0.3" />` : ''}
+      ${
+        biome === 'rock'
+          ? `
+            <circle cx="${c - radius * 0.25}" cy="${c - radius * 0.15}" r="${radius * 0.16}" fill="rgba(15,23,42,0.28)" />
+            <circle cx="${c + radius * 0.3}" cy="${c + radius * 0.22}" r="${radius * 0.12}" fill="rgba(15,23,42,0.24)" />
+          `
+          : ''
+      }
+    `;
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <defs>
+        <radialGradient id="${gradientId}" cx="30%" cy="28%" r="75%">
+          <stop offset="0%" stop-color="${palette.accent}" />
+          <stop offset="52%" stop-color="${palette.secondary}" />
+          <stop offset="100%" stop-color="${palette.base}" />
+        </radialGradient>
+        <clipPath id="${clipId}">
+          <circle cx="${c}" cy="${c}" r="${radius}" />
+        </clipPath>
+        <radialGradient id="${surfaceId}" cx="35%" cy="32%" r="70%">
+          <stop offset="0%" stop-color="rgba(255,255,255,0.0)" />
+          <stop offset="70%" stop-color="rgba(255,255,255,0.0)" />
+          <stop offset="100%" stop-color="rgba(2,6,23,0.5)" />
+        </radialGradient>
+      </defs>
+      ${claimedColor ? `<circle cx="${c}" cy="${c}" r="${radius + 12}" fill="${claimedColor}" opacity="0.06" /><circle cx="${c}" cy="${c}" r="${radius + 5}" fill="none" stroke="${claimedColor}" stroke-width="1.6" opacity="0.6" />` : ''}
+      <ellipse cx="${c + 2}" cy="${c + radius * 1.08}" rx="${radius * 1.35}" ry="${radius * 0.52}" fill="rgba(0,0,0,0.56)" opacity="0.95" />
+      <g clip-path="url(#${clipId})">
+        <circle cx="${c}" cy="${c}" r="${radius}" fill="url(#${gradientId})" />
+        ${surfaceDetail}
+        <circle cx="${c}" cy="${c}" r="${radius}" fill="url(#${surfaceId})" />
+        <ellipse cx="${c - radius * 0.2}" cy="${c - radius * 0.55}" rx="${radius * 0.6}" ry="${radius * 0.28}" fill="#ffffff" opacity="0.22" transform="rotate(-18 ${c} ${c})" />
+      </g>
+      <circle cx="${c}" cy="${c}" r="${radius}" fill="none" stroke="${isSelected ? '#38bdf8' : 'rgba(226,232,240,0.18)'}" stroke-width="1.3" />
+      ${devMarkup}
+      ${node.isDysonSphere ? `<g opacity="0.7"><circle cx="${c}" cy="${c}" r="${radius * 0.52}" fill="none" stroke="#fde68a" stroke-width="1.2" /><circle cx="${c}" cy="${c}" r="${radius * 0.26}" fill="#fcd34d" opacity="0.85" /></g>` : ''}
+      <circle cx="${c}" cy="${c}" r="${radius}" fill="none" stroke="#0f172a" stroke-width="0.8" opacity="0.55" />
+      <circle cx="${c}" cy="${c}" r="${Math.max(radius - 0.8, 0.2)}" fill="none" stroke="#ffffff" stroke-width="0.5" opacity="0.14" />
+    </svg>
+  `;
+}
+
+const ShipIcon: React.FC<{ type: Ship['type']; color: string; size?: number }> = React.memo(({ type, color, size = 7 }) => {
+  const dim = size * 4;
+  return (
+    <use
+      href={`#ship-sprite-${type}`}
+      x={-dim / 2}
+      y={-dim / 2}
+      width={dim}
+      height={dim}
+      color={color}
+      pointerEvents="none"
+    />
+  );
+});
+
+const SoldierIcon: React.FC<{ color: string; size?: number }> = React.memo(({ color, size = 10 }) => {
+  return (
+    <use
+      href="#ground-soldier-sprite"
+      x={-size / 2}
+      y={-size / 2}
+      width={size}
+      height={size}
+      color={color}
+      pointerEvents="none"
+    />
+  );
+});
 const OrbitShips: React.FC<{
   ships: Ship[];
   playerColors: Record<string, string>;
@@ -416,12 +528,13 @@ const OrbitShips: React.FC<{
 
   const display = groups.slice(0, 8);
   const orbitRadius = planetRadius + 18;
-  const angleStep = (2 * Math.PI) / Math.max(display.length, 1);
+  // Keep ships off the lower/name side of the planet. These slots stay on the top/sides.
+  const orbitSlots = [-90, -45, -135, 0, 180, -25, -155, -70];
 
   return (
     <>
       {display.map((group, i) => {
-        const angle = i * angleStep - Math.PI / 2;
+        const angle = (orbitSlots[i % orbitSlots.length] * Math.PI) / 180;
         const cx = Math.cos(angle) * orbitRadius;
         const cy = Math.sin(angle) * orbitRadius;
         const player = players.find((p) => p.id === group.owner);
@@ -444,115 +557,123 @@ const OrbitShips: React.FC<{
   );
 };
 
+
 const PlanetBody: React.FC<{
   node: StarNode;
   radius: number;
   isSelected: boolean;
   claimedColor?: string | null;
-}> = ({ node, radius, isSelected, claimedColor }) => {
-  const biome = getBiome(node);
-  const palette = getBiomePalette(biome);
-  const gradientId = `planet-grad-${node.id}`;
-  const clipId = `planet-clip-${node.id}`;
-  const surfaceId = `planet-surface-${node.id}`;
-
-  const developmentColors: Record<string, string> = {
-    colony: '#a3e635',
-    city: '#93c5fd',
-    metropolis: '#c084fc',
-    arcology: '#67e8f9',
-    coreworld: '#fde68a',
-  };
+}> = React.memo(({ node, radius, isSelected, claimedColor }) => {
+  const pad = 24;
+  const size = radius * 2 + pad * 2;
+  const href = useMemo(
+    () =>
+      getCachedSvgSprite(
+        `planet:${node.id}:${radius}:${isSelected ? 1 : 0}:${claimedColor ?? 'none'}:${node.development}:${node.isDysonSphere ? 1 : 0}:${node.biome ?? 'auto'}:${node.claimedBy ?? 'none'}:${node.hasShipyard ? 1 : 0}:${node.hasFtlInhibitor ? 1 : 0}`,
+        planetSpriteMarkup(node, radius, isSelected, claimedColor)
+      ),
+    [node, radius, isSelected, claimedColor]
+  );
 
   return (
-    <>
-      <defs>
-        <radialGradient id={gradientId} cx="30%" cy="28%" r="75%">
-          <stop offset="0%" stopColor={palette.accent} />
-          <stop offset="52%" stopColor={palette.secondary} />
-          <stop offset="100%" stopColor={palette.base} />
-        </radialGradient>
-        <clipPath id={clipId}>
-          <circle r={radius} />
-        </clipPath>
-        <radialGradient id={surfaceId} cx="35%" cy="32%" r="70%">
-          <stop offset="0%" stopColor="rgba(255,255,255,0.0)" />
-          <stop offset="70%" stopColor="rgba(255,255,255,0.0)" />
-          <stop offset="100%" stopColor="rgba(2,6,23,0.5)" />
-        </radialGradient>
-      </defs>
-
-      {claimedColor && (
-        <>
-          <circle r={radius + 12} fill={claimedColor} opacity="0.06" />
-          <circle r={radius + 5} fill="none" stroke={claimedColor} strokeWidth="1.6" opacity="0.6" />
-        </>
-      )}
-
-      <ellipse cx="2" cy={radius * 1.08} rx={radius * 1.35} ry={radius * 0.52} fill="rgba(0,0,0,0.56)" opacity="0.95" />
-
-      <g clipPath={`url(#${clipId})`} filter="url(#planet-shadow)">
-        <circle r={radius} fill={`url(#${gradientId})`} />
-
-        {biome === 'gas' ? (
-          <>
-            <ellipse cx="-1" cy="-7" rx={radius * 1.05} ry={radius * 0.2} fill={palette.accent} opacity="0.45" />
-            <ellipse cx="1" cy="-1" rx={radius * 1.05} ry={radius * 0.17} fill={palette.secondary} opacity="0.45" />
-            <ellipse cx="0" cy="6" rx={radius * 1.05} ry={radius * 0.2} fill={palette.base} opacity="0.35" />
-            <path d={`M${-radius} ${radius * 0.1} Q0 ${-radius * 0.2} ${radius} ${radius * 0.1}`} stroke={palette.cloud} strokeWidth="1.2" opacity="0.3" fill="none" />
-          </>
-        ) : (
-          <>
-            <ellipse cx={-radius * 0.2} cy={-radius * 0.18} rx={radius * 0.5} ry={radius * 0.24} fill={palette.secondary} opacity="0.58" transform="rotate(-18)" />
-            <ellipse cx={radius * 0.24} cy={radius * 0.12} rx={radius * 0.38} ry={radius * 0.19} fill={palette.base} opacity="0.42" transform="rotate(24)" />
-            <ellipse cx={-radius * 0.34} cy={radius * 0.28} rx={radius * 0.22} ry={radius * 0.14} fill={palette.accent} opacity="0.34" transform="rotate(-10)" />
-            {(biome === 'ocean' || biome === 'tropical' || biome === 'continental' || biome === 'savannah' || biome === 'tundra') && (
-              <>
-                <path d={`M${-radius * 0.85} ${-radius * 0.1} Q${-radius * 0.2} ${-radius * 0.55} ${radius * 0.25} ${-radius * 0.18} Q${radius * 0.45} ${radius * 0.05} ${radius * 0.8} ${-radius * 0.2}`} stroke={palette.cloud} strokeWidth="1.1" opacity="0.38" fill="none" />
-                <path d={`M${-radius * 0.7} ${radius * 0.38} Q0 ${radius * 0.15} ${radius * 0.55} ${radius * 0.42}`} stroke={palette.cloud} strokeWidth="0.9" opacity="0.28" fill="none" />
-              </>
-            )}
-            {biome === 'desert' && (
-              <>
-                <path d={`M${-radius * 0.95} ${-radius * 0.25} Q${-radius * 0.2} ${-radius * 0.42} ${radius * 0.7} ${-radius * 0.2}`} stroke={palette.accent} strokeWidth="1" opacity="0.35" fill="none" />
-                <path d={`M${-radius * 0.8} ${radius * 0.25} Q0 0 ${radius * 0.8} ${radius * 0.25}`} stroke={palette.accent} strokeWidth="0.9" opacity="0.25" fill="none" />
-              </>
-            )}
-            {biome === 'arid' && <ellipse cx={radius * 0.18} cy={-radius * 0.14} rx={radius * 0.62} ry={radius * 0.12} fill={palette.accent} opacity="0.22" transform="rotate(-24)" />}
-            {biome === 'arctic' && <ellipse cx={-radius * 0.08} cy={-radius * 0.08} rx={radius * 0.75} ry={radius * 0.5} fill="#ffffff" opacity="0.3" />}
-            {biome === 'rock' && (
-              <>
-                <circle cx={-radius * 0.25} cy={-radius * 0.15} r={radius * 0.16} fill="rgba(15,23,42,0.28)" />
-                <circle cx={radius * 0.3} cy={radius * 0.22} r={radius * 0.12} fill="rgba(15,23,42,0.24)" />
-              </>
-            )}
-          </>
-        )}
-
-        <circle r={radius} fill={`url(#${surfaceId})`} />
-        <ellipse cx={-radius * 0.2} cy={-radius * 0.55} rx={radius * 0.6} ry={radius * 0.28} fill="#ffffff" opacity="0.22" transform="rotate(-18)" />
-      </g>
-
-      <circle r={radius} fill="none" stroke={isSelected ? '#38bdf8' : 'rgba(226,232,240,0.18)'} strokeWidth="1.3" />
-
-      {!node.isDysonSphere && node.development !== 'none' && (
-        <g transform={`translate(0, ${radius * 0.15})`} pointerEvents="none">
-          <DevelopmentIcon development={node.development} color={developmentColors[node.development] ?? palette.city} />
-        </g>
-      )}
-
-      {node.isDysonSphere && (
-        <g opacity="0.7">
-          <circle r={radius * 0.52} fill="none" stroke="#fde68a" strokeWidth="1.2" />
-          <circle r={radius * 0.26} fill="#fcd34d" opacity="0.85" />
-        </g>
-      )}
-
-      <circle r={radius} fill="none" stroke="#0f172a" strokeWidth="0.8" opacity="0.55" />
-      <circle r={radius - 0.8} fill="none" stroke="#ffffff" strokeWidth="0.5" opacity="0.14" />
-    </>
+    <image
+      href={href}
+      x={-radius - pad}
+      y={-radius - pad}
+      width={size}
+      height={size}
+      preserveAspectRatio="xMidYMid meet"
+      imageRendering="auto"
+      pointerEvents="none"
+    />
   );
-};
+});
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function actionProgress(action: { startedAt: string; completesAt: string }, now: number) {
+  const start = new Date(action.startedAt).getTime();
+  const end = new Date(action.completesAt).getTime();
+  return clamp01((now - start) / Math.max(1, end - start));
+}
+
+function actionRemainingSeconds(action: { completesAt: string }, now: number) {
+  return Math.max(0, Math.ceil((new Date(action.completesAt).getTime() - now) / 1000));
+}
+
+function findDisplayPath(startId: string, targetId: string, nodes: StarNode[]): StarNode[] {
+  const nodeMap = new globalThis.Map(nodes.map(node => [node.id, node]));
+  const start = nodeMap.get(startId);
+  const target = nodeMap.get(targetId);
+  if (!start || !target) return [];
+
+  const queue: string[] = [startId];
+  const previous = new globalThis.Map<string, string | null>([[startId, null]]);
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    if (currentId === targetId) break;
+    const current = nodeMap.get(currentId);
+    if (!current) continue;
+    for (const nextId of current.links) {
+      if (previous.has(nextId)) continue;
+      previous.set(nextId, currentId);
+      queue.push(nextId);
+    }
+  }
+
+  if (!previous.has(targetId)) return [start, target];
+  const pathIds: string[] = [];
+  let cursor: string | null = targetId;
+  while (cursor) {
+    pathIds.push(cursor);
+    cursor = previous.get(cursor) ?? null;
+  }
+  pathIds.reverse();
+  return pathIds.map(id => nodeMap.get(id)).filter((node): node is StarNode => Boolean(node));
+}
+
+function pointOnPath(path: StarNode[], progress: number) {
+  if (path.length <= 1) {
+    const only = path[0] || { x: 0, y: 0 };
+    return { x: only.x, y: only.y, angle: 0, passedSegments: [] as Array<[StarNode, StarNode]>, activeSegment: null as [StarNode, StarNode] | null };
+  }
+
+  const lengths = path.slice(0, -1).map((node, index) => Math.hypot(path[index + 1].x - node.x, path[index + 1].y - node.y));
+  const total = Math.max(1, lengths.reduce((sum, length) => sum + length, 0));
+  let distance = clamp01(progress) * total;
+  const passedSegments: Array<[StarNode, StarNode]> = [];
+
+  for (let i = 0; i < lengths.length; i++) {
+    const start = path[i];
+    const end = path[i + 1];
+    if (distance > lengths[i]) {
+      passedSegments.push([start, end]);
+      distance -= lengths[i];
+      continue;
+    }
+    const local = lengths[i] <= 0 ? 1 : distance / lengths[i];
+    return {
+      x: start.x + (end.x - start.x) * local,
+      y: start.y + (end.y - start.y) * local,
+      angle: Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI + 90,
+      passedSegments,
+      activeSegment: [start, end] as [StarNode, StarNode]
+    };
+  }
+
+  const last = path[path.length - 1];
+  const previous = path[path.length - 2];
+  return {
+    x: last.x,
+    y: last.y,
+    angle: Math.atan2(last.y - previous.y, last.x - previous.x) * 180 / Math.PI + 90,
+    passedSegments: path.slice(0, -1).map((node, index) => [node, path[index + 1]] as [StarNode, StarNode]),
+    activeSegment: null as [StarNode, StarNode] | null
+  };
+}
 
 export const Map: React.FC<MapProps> = ({
   gameState,
@@ -565,6 +686,12 @@ export const Map: React.FC<MapProps> = ({
   fogOfWarEnabled,
 }) => {
   const { panX, panY, scale, handlers, reset } = usePanZoom(0.3, 2.5, 50, 50, 0.65);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const getPlayerColorHex = (claimedBy: string | null) => {
     if (!claimedBy) return '#475569';
@@ -598,6 +725,10 @@ export const Map: React.FC<MapProps> = ({
   }, [fogOfWarEnabled, gameState.nodes, myPlayerId]);
 
   const isNodeVisible = (node: StarNode) => visibleNodeIds.has(node.id);
+  const getShipColor = (ownerId: string) => {
+    const player = gameState.players.find((p) => p.id === ownerId);
+    return player ? PLAYER_COLORS[player.color] : '#94a3b8';
+  };
 
   const handleNodeClick = (node: StarNode) => {
     audio.playBeep(500, 0.05);
@@ -605,8 +736,7 @@ export const Map: React.FC<MapProps> = ({
     if (
       selectedShip &&
       isReachable &&
-      gameState.phase === 1 &&
-      gameState.players[gameState.activePlayerIndex].id === myPlayerId
+      selectedShip.owner === myPlayerId
     ) {
       onMoveShip(node.id);
     } else {
@@ -615,7 +745,7 @@ export const Map: React.FC<MapProps> = ({
   };
 
   const ringsCount = Math.ceil(Math.sqrt(gameState.nodes.length / 3));
-  const maxRadius = 450;
+  const maxRadius = getMapLayoutRadius(gameState.nodes.length);
   const centerX = 500;
   const centerY = 500;
 
@@ -626,26 +756,7 @@ export const Map: React.FC<MapProps> = ({
 
       <svg className="relative z-[1] h-full w-full cursor-grab select-none active:cursor-grabbing" {...handlers}>
         <defs>
-          <filter id="planet-shadow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0" dy="10" stdDeviation="7" floodColor="#000000" floodOpacity="0.62" />
-          </filter>
-          <filter id="ship-shadow" x="-90%" y="-90%" width="280%" height="280%">
-            <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" floodColor="#000000" floodOpacity="0.9" />
-            <feDropShadow dx="0" dy="0" stdDeviation="1" floodColor="#7dd3fc" floodOpacity="0.32" />
-          </filter>
-          <filter id="structure-shadow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0.7" dy="1.2" stdDeviation="0.9" floodColor="#000000" floodOpacity="0.75" />
-          </filter>
-          <filter id="shipyard-glow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0" dy="0" stdDeviation="2.6" floodColor="#67e8f9" floodOpacity="0.85" />
-          </filter>
-          <filter id="ftl-glow" x="-80%" y="-80%" width="260%" height="260%">
-            <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#ef4444" floodOpacity="0.9" />
-            <feDropShadow dx="0" dy="0" stdDeviation="1.2" floodColor="#fecaca" floodOpacity="0.5" />
-          </filter>
-          <filter id="hyperlane-glow" x="-60%" y="-60%" width="220%" height="220%">
-            <feDropShadow dx="0" dy="0" stdDeviation="2.2" floodColor="#38bdf8" floodOpacity="0.55" />
-          </filter>
+          <ShipSpriteDefs />
           <linearGradient id="hyperlane-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#1d4ed8" stopOpacity="0.35" />
             <stop offset="50%" stopColor="#7dd3fc" stopOpacity="0.95" />
@@ -696,7 +807,6 @@ export const Map: React.FC<MapProps> = ({
                     strokeWidth={isSelectedPath ? 8 : 6}
                     strokeLinecap="round"
                     opacity={isSelectedPath ? 0.18 : 0.12}
-                    filter="url(#hyperlane-glow)"
                   />
                   <line
                     x1={node.x}
@@ -717,7 +827,6 @@ export const Map: React.FC<MapProps> = ({
                     strokeWidth={isSelectedPath ? 1.6 : 1.15}
                     strokeLinecap="round"
                     opacity={isSelectedPath ? 0.95 : 0.72}
-                    filter="url(#hyperlane-glow)"
                   />
                   <line
                     x1={node.x}
@@ -739,6 +848,127 @@ export const Map: React.FC<MapProps> = ({
             })
           )}
 
+          {/* Real-time movement / order animations */}
+          {(gameState.pendingActions || []).filter(action => action.type === 'move_ship' && action.ship && action.targetNodeId).map((action) => {
+            const source = gameState.nodes.find(n => n.id === action.nodeId);
+            const target = gameState.nodes.find(n => n.id === action.targetNodeId);
+            const ship = action.ship;
+            if (!source || !target || !ship || (!isNodeVisible(source) && !isNodeVisible(target))) return null;
+            const progress = actionProgress(action, now);
+            const path = findDisplayPath(source.id, target.id, gameState.nodes);
+            const pathPoint = pointOnPath(path, progress);
+            const x = pathPoint.x;
+            const y = pathPoint.y;
+            const angle = pathPoint.angle;
+            const color = getShipColor(action.playerId);
+            const remaining = actionRemainingSeconds(action, now);
+            return (
+              <g key={`move-fx-${action.id}`} pointerEvents="none">
+                {path.slice(0, -1).map((pathNode, index) => {
+                  const nextNode = path[index + 1];
+                  return (
+                    <line
+                      key={`move-route-${action.id}-${pathNode.id}-${nextNode.id}`}
+                      x1={pathNode.x}
+                      y1={pathNode.y}
+                      x2={nextNode.x}
+                      y2={nextNode.y}
+                      stroke={color}
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                      strokeDasharray="7 9"
+                      opacity="0.30"
+                    >
+                      <animate attributeName="stroke-dashoffset" from="30" to="0" dur="1.5s" repeatCount="indefinite" />
+                    </line>
+                  );
+                })}
+                {pathPoint.passedSegments.map(([segmentStart, segmentEnd]) => (
+                  <line
+                    key={`move-complete-${action.id}-${segmentStart.id}-${segmentEnd.id}`}
+                    x1={segmentStart.x}
+                    y1={segmentStart.y}
+                    x2={segmentEnd.x}
+                    y2={segmentEnd.y}
+                    stroke="#f8fafc"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                    opacity="0.72"
+                  />
+                ))}
+                {pathPoint.activeSegment && (
+                  <line
+                    x1={pathPoint.activeSegment[0].x}
+                    y1={pathPoint.activeSegment[0].y}
+                    x2={x}
+                    y2={y}
+                    stroke="#f8fafc"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                    opacity="0.72"
+                  />
+                )}
+                <g transform={`translate(${target.x}, ${target.y - 34})`} opacity="0.30">
+                  <g transform={`rotate(${angle}) scale(1.25)`}>
+                    <ShipIcon type={ship.type} color={color} size={7} />
+                  </g>
+                </g>
+                <g transform={`translate(${x}, ${y}) rotate(${angle})`} opacity="0.95">
+                  <circle r="13" fill={color} opacity="0.10" />
+                  <ShipIcon type={ship.type} color={color} size={7} />
+                </g>
+                <g transform={`translate(${target.x - 25}, ${target.y + 32})`}>
+                  <rect width="50" height="6" rx="3" fill="#020617" stroke="rgba(148,163,184,0.55)" strokeWidth="0.8" />
+                  <rect width={50 * progress} height="6" rx="3" fill={color} opacity="0.92" />
+                  <text x="25" y="-3" textAnchor="middle" fill="#e0f2fe" fontSize="7" fontWeight="bold" fontFamily="monospace" stroke="rgba(0,0,0,0.8)" strokeWidth="2" paintOrder="stroke fill">
+                    {remaining}s
+                  </text>
+                </g>
+              </g>
+            );
+          })}
+
+          {(gameState.pendingActions || []).filter(action => action.type !== 'move_ship').map((action) => {
+            const node = gameState.nodes.find(n => n.id === (action.targetNodeId || action.nodeId));
+            if (!node || !isNodeVisible(node)) return null;
+            const progress = actionProgress(action, now);
+            const remaining = actionRemainingSeconds(action, now);
+            const color = action.type === 'colonize' ? '#34d399' : action.type === 'scrap_ship' ? '#f97316' : '#38bdf8';
+            const label = action.type === 'colonize' ? 'COLONIZE' : action.type === 'scrap_ship' ? 'SCRAP' : action.type === 'build_ship' ? 'SHIP' : action.type === 'build_ground' ? 'TROOP' : 'WORK';
+            return (
+              <g key={`work-fx-${action.id}`} transform={`translate(${node.x}, ${node.y})`} pointerEvents="none">
+                {action.type === 'colonize' && (
+                  <circle r="31" fill="none" stroke="#34d399" strokeWidth="1.5" strokeDasharray="5 5" opacity="0.78">
+                    <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="8s" repeatCount="indefinite" />
+                  </circle>
+                )}
+                <g transform="translate(-26, 39)">
+                  <rect width="52" height="7" rx="3.5" fill="#020617" stroke="rgba(148,163,184,0.55)" strokeWidth="0.8" />
+                  <rect width={52 * progress} height="7" rx="3.5" fill={color} opacity="0.92" />
+                  <text x="26" y="-3" textAnchor="middle" fill="#e0f2fe" fontSize="7" fontWeight="bold" fontFamily="monospace" stroke="rgba(0,0,0,0.8)" strokeWidth="2" paintOrder="stroke fill">
+                    {label} {remaining}s
+                  </text>
+                </g>
+              </g>
+            );
+          })}
+
+          {gameState.activeCombatNodeId && (() => {
+            const combatNode = gameState.nodes.find(n => n.id === gameState.activeCombatNodeId);
+            if (!combatNode || !isNodeVisible(combatNode)) return null;
+            return (
+              <g key={`combat-fx-${gameState.activeCombatNodeId}-${gameState.activeCombatUpdatedAt}`} transform={`translate(${combatNode.x}, ${combatNode.y})`} pointerEvents="none">
+                <circle r="25" fill="rgba(239,68,68,0.14)" stroke="#ef4444" strokeWidth="2" opacity="0.9">
+                  <animate attributeName="r" from="24" to="46" dur="1.1s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" from="0.95" to="0" dur="1.1s" repeatCount="indefinite" />
+                </circle>
+                <path d="M-32 0 H32 M0 -32 V32" stroke="#fca5a5" strokeWidth="1.4" strokeLinecap="round" opacity="0.75">
+                  <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="2.6s" repeatCount="indefinite" />
+                </path>
+              </g>
+            );
+          })()}
+
           {/* Star systems */}
           {gameState.nodes.map((node) => {
             const visible = isNodeVisible(node);
@@ -757,33 +987,39 @@ export const Map: React.FC<MapProps> = ({
             }
 
             return (
-              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="group cursor-pointer" onClick={() => handleNodeClick(node)}>
+              <g key={node.id} transform={`translate(${node.x}, ${node.y})`} className="group cursor-pointer">
+                <circle
+                  r={planetR + 15}
+                  fill="transparent"
+                  pointerEvents="all"
+                  onClick={() => handleNodeClick(node)}
+                />
                 {isReachable && (
-                  <circle r={planetR + 14} fill="none" stroke="#facc15" strokeWidth="1.8" strokeDasharray="5 5" opacity="0.78">
+                  <circle r={planetR + 14} fill="none" stroke="#facc15" strokeWidth="1.8" strokeDasharray="5 5" opacity="0.78" pointerEvents="none">
                     <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="10s" repeatCount="indefinite" />
                   </circle>
                 )}
 
                 {isSelected && (
                   <g pointerEvents="none">
-                    <circle r={planetR + 9} fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="8 6" opacity="0.9">
+                    <circle r={planetR + 9} fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="8 6" opacity="0.9" pointerEvents="none">
                       <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="7s" repeatCount="indefinite" />
                     </circle>
-                    <circle r={planetR + 13} fill="none" stroke="#38bdf8" strokeWidth="1" strokeDasharray="3 9" opacity="0.4">
+                    <circle r={planetR + 13} fill="none" stroke="#38bdf8" strokeWidth="1" strokeDasharray="3 9" opacity="0.4" pointerEvents="none">
                       <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="360 0 0" to="0 0 0" dur="12s" repeatCount="indefinite" />
                     </circle>
                   </g>
                 )}
 
                 {node.hasGateway && (
-                  <circle r={planetR + 8} fill="none" stroke="#8b5cf6" strokeWidth="1.2" strokeDasharray="7 5" opacity="0.85">
+                  <circle r={planetR + 8} fill="none" stroke="#8b5cf6" strokeWidth="1.2" strokeDasharray="7 5" opacity="0.85" pointerEvents="none">
                     <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="0 0 0" to="360 0 0" dur="16s" repeatCount="indefinite" />
                   </circle>
                 )}
-                {node.hasShipyard && <circle r={planetR + 5} fill="none" stroke="#06b6d4" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />}
-                {node.hasFtlInhibitor && <circle r={planetR + 6} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.75" />}
+                {node.hasShipyard && <circle r={planetR + 5} fill="none" stroke="#06b6d4" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" pointerEvents="none" />}
+                {node.hasFtlInhibitor && <circle r={planetR + 6} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.75" pointerEvents="none" />}
 
-                <g className="transition-transform duration-200 ease-out group-hover:scale-105" style={{ transformOrigin: 'center', transformBox: 'fill-box' }}>
+                <g className="pointer-events-none transition-transform duration-200 ease-out group-hover:scale-105" style={{ transformOrigin: 'center', transformBox: 'fill-box' }}>
                   <PlanetBody node={node} radius={planetR} isSelected={isSelected} claimedColor={node.claimedBy ? nodeColor : null} />
                 </g>
 
@@ -802,18 +1038,24 @@ export const Map: React.FC<MapProps> = ({
                     purple: '#a78bfa',
                     yellow: '#fbbf24',
                   };
+                  const limitedGroups = groups.slice(0, 4);
+                  const soldierY = planetR * 0.74;
                   return (
-                    <g transform={`translate(${-((groups.length - 1) * 8)}, ${planetR + 8})`} pointerEvents="none">
-                      {groups.map((group, idx) => {
+                    <g transform={`translate(${-((limitedGroups.length - 1) * 5)}, ${soldierY})`} pointerEvents="none">
+                      {limitedGroups.map((group, idx) => {
                         const player = gameState.players.find((p) => p.id === group.owner);
                         const color = group.owner === 'npc' ? '#94a3b8' : shadeMap[player?.color || 'green'];
                         return (
-                          <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 16}, 0)`}>
-                            <rect x="-5" y="-5" width="10" height="10" fill={color} stroke="#020617" strokeWidth="1" rx="1.5" opacity="0.95" />
+                          <g key={`${node.id}-ground-${group.owner}`} transform={`translate(${idx * 10}, 0)`}>
+                            <circle r="5.2" fill="#020617" opacity="0.62" />
+                            <SoldierIcon color={color} size={10} />
                             {group.count > 1 && (
-                              <text x="0" y="3" textAnchor="middle" fill="#020617" fontSize="6" fontWeight="bold" fontFamily="monospace">
-                                {group.count}
-                              </text>
+                              <g transform="translate(6, -6)">
+                                <circle r="4.4" fill="#020617" stroke={color} strokeWidth="0.8" />
+                                <text x="0" y="2.3" textAnchor="middle" fill={color} fontSize="5.8" fontWeight="bold" fontFamily="monospace">
+                                  {group.count}
+                                </text>
+                              </g>
                             )}
                           </g>
                         );
@@ -829,7 +1071,10 @@ export const Map: React.FC<MapProps> = ({
                   fontSize="11"
                   fontWeight={isSelected ? 'bold' : 'normal'}
                   fontFamily="monospace"
-                  className="pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
+                  className="pointer-events-none"
+                  stroke="rgba(0,0,0,0.75)"
+                  strokeWidth="4"
+                  paintOrder="stroke fill"
                 >
                   {node.name}
                 </text>
@@ -894,13 +1139,13 @@ export const Map: React.FC<MapProps> = ({
                     })
                 )}
                 {ownedNodes.filter((node) => node.hasShipyard).map((node) => (
-                  <g key={`territory-shipyard-${player.id}-${node.id}`} filter="url(#shipyard-glow)">
+                  <g key={`territory-shipyard-${player.id}-${node.id}`}>
                     <circle cx={node.x} cy={node.y} r={24} fill="none" stroke="#67e8f9" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.95" />
                     <circle cx={node.x} cy={node.y} r={28} fill="none" stroke="#bae6fd" strokeWidth="0.8" opacity="0.55" />
                   </g>
                 ))}
                 {ownedNodes.filter((node) => node.hasFtlInhibitor).map((node) => (
-                  <g key={`territory-ftl-${player.id}-${node.id}`} filter="url(#ftl-glow)">
+                  <g key={`territory-ftl-${player.id}-${node.id}`}>
                     <circle cx={node.x} cy={node.y} r={25} fill="none" stroke="#ef4444" strokeWidth="1.7" opacity="0.95" />
                     <circle cx={node.x} cy={node.y} r={29} fill="none" stroke="#fecaca" strokeWidth="0.9" strokeDasharray="5 4" opacity="0.55" />
                   </g>

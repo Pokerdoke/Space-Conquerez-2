@@ -20,6 +20,7 @@ export type PublicGameSummary = {
   playerCount: number;
   maxPlayers: number;
   mapSize: GameState['mapSize'];
+  galaxyType?: GameState['galaxyType'];
   npcCount: number;
   isPublic: boolean;
   updatedAt: string;
@@ -87,7 +88,8 @@ function makeInitialState(
   maxPlayers: number,
   mapSize: GameState['mapSize'],
   npcCount: number,
-  isPublic = true
+  isPublic = true,
+  galaxyType: NonNullable<GameState['galaxyType']> = 'spiral4'
 ): GameState {
   const now = new Date().toISOString();
   return {
@@ -96,6 +98,7 @@ function makeInitialState(
     creatorId: creator.id,
     maxPlayers,
     mapSize,
+    galaxyType,
     npcCount,
     isPublic,
     status: 'lobby',
@@ -127,6 +130,7 @@ function summarizePublicGame(code: string, state: GameState, updatedAt?: string)
     playerCount: state.players.length,
     maxPlayers: state.maxPlayers,
     mapSize: state.mapSize,
+    galaxyType: state.galaxyType || 'spiral4',
     npcCount: state.npcCount,
     isPublic: true,
     updatedAt: stamp || new Date().toISOString()
@@ -144,11 +148,11 @@ export function setDbMode(mode: DbMode) {
 }
 
 const localDb = {
-  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number, isPublic = true) {
+  createRoom(creatorName: string, maxPlayers: number, mapSize: GameState['mapSize'], npcCount: number, isPublic = true, galaxyType: NonNullable<GameState['galaxyType']> = 'spiral4') {
     const code = generateRoomCode();
     const identity = getLocalPlayerIdentity(creatorName);
     const creatorPlayer = makePlayer(identity.id, identity.name, 0, true);
-    const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic);
+    const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic, galaxyType);
     localStorage.setItem(getRoomKey(code), JSON.stringify(state));
     const rooms = JSON.parse(localStorage.getItem(ROOMS_LIST_KEY) || '[]');
     if (!rooms.includes(code)) localStorage.setItem(ROOMS_LIST_KEY, JSON.stringify([...rooms, code]));
@@ -208,7 +212,8 @@ export async function createGameRoom(
   maxPlayers: number,
   mapSize: GameState['mapSize'],
   npcCount: number,
-  isPublic = true
+  isPublic = true,
+  galaxyType: NonNullable<GameState['galaxyType']> = 'spiral4'
 ): Promise<{ code: string; state: GameState }> {
   const mode = getDbMode();
   if (mode === 'supabase') {
@@ -222,7 +227,7 @@ export async function createGameRoom(
         if (!data) break;
         code = generateRoomCode();
       }
-      const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic);
+      const state = makeInitialState(code, creatorPlayer, maxPlayers, mapSize, npcCount, isPublic, galaxyType);
       const { error } = await client.from('games').insert([{ id: code, state, status: 'lobby' }]);
       if (error) throw new Error(`Supabase games table error: ${error.message}. Run supabase_schema.sql in the Supabase SQL editor first.`);
 
@@ -231,7 +236,7 @@ export async function createGameRoom(
       return { code, state };
     }
   }
-  return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount, isPublic);
+  return localDb.createRoom(creatorName, maxPlayers, mapSize, npcCount, isPublic, galaxyType);
 }
 
 
@@ -373,7 +378,7 @@ export async function updateLobbySettings(
   code: string,
   currentState: GameState,
   actorPlayerId: string,
-  changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'npcCount' | 'isPublic'>>
+  changes: Partial<Pick<GameState, 'maxPlayers' | 'mapSize' | 'galaxyType' | 'npcCount' | 'isPublic'>>
 ): Promise<GameState> {
   if (currentState.status !== 'lobby') throw new Error('Settings can only be changed before the game starts.');
   if (currentState.creatorId !== actorPlayerId) throw new Error('Only the host can change lobby settings.');
@@ -391,7 +396,7 @@ export async function updateLobbySettings(
     lastActionAt: new Date().toISOString(),
     actionLog: [
       ...currentState.actionLog,
-      `Lobby settings updated: ${nextMaxPlayers} players, ${changes.mapSize ?? currentState.mapSize} map, ${changes.npcCount ?? currentState.npcCount} NPC systems, ${(changes.isPublic ?? currentState.isPublic !== false) ? 'public' : 'private'}.`
+      `Lobby settings updated: ${nextMaxPlayers} players, ${changes.mapSize ?? currentState.mapSize} map, ${(changes.galaxyType ?? currentState.galaxyType ?? 'spiral4')} galaxy, ${changes.npcCount ?? currentState.npcCount} NPC systems, ${(changes.isPublic ?? currentState.isPublic !== false) ? 'public' : 'private'}.`
     ]
   };
 

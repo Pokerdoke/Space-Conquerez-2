@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { resolveSpaceCombat, invadePlanetWithCarriers, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, isHostileOwner } from '../services/gameLogic';
+import { resolveSpaceCombat, invadePlanetWithCarriers, resolveGroundCombatRound, resolveOrbitalBombardment, canBattleshipBombard, isHostileOwner, REALTIME_ACTION_SECONDS } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Swords, ShieldAlert, Crosshair, Eye } from 'lucide-react';
 import { HealthBar } from './HealthBar';
@@ -75,11 +75,11 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
   onUpdateState
 }) => {
   const me = gameState.players.find(p => p.id === myPlayerId);
-  const activePlayer = gameState.players[gameState.activePlayerIndex];
-  const isMyTurn = activePlayer?.id === myPlayerId;
-  const isCombatPhase = gameState.phase === 2;
-  const perspectivePlayerId = isMyTurn ? myPlayerId : activePlayer?.id || myPlayerId;
-  const isSpectating = isCombatPhase && !isMyTurn;
+  const activePlayer = gameState.players[gameState.activePlayerIndex] || gameState.players.find(p => p.id === myPlayerId);
+  const isMyTurn = true;
+  const isCombatPhase = true;
+  const perspectivePlayerId = myPlayerId;
+  const isSpectating = false;
 
   const [selectedAttackerShipId, setSelectedAttackerShipId] = useState<string | null>(null);
   const [selectedDefenderShipId, setSelectedDefenderShipId] = useState<string | null>(null);
@@ -109,18 +109,6 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
     setBusyAction(null);
   }, [node, gameState.lastUpdated, selectedAttackerShipId, selectedDefenderShipId, selectedAttackerGroundId, selectedDefenderGroundId, selectedBombardShipId, selectedBombardTargetId]);
 
-  useEffect(() => {
-    if (!isMyTurn) {
-      setSelectedAttackerShipId(null);
-      setSelectedDefenderShipId(null);
-      setSelectedAttackerGroundId(null);
-      setSelectedDefenderGroundId(null);
-      setLockedShipAttackerId(null);
-      setLockedGroundAttackerId(null);
-      setSelectedBombardShipId(null);
-      setSelectedBombardTargetId(null);
-    }
-  }, [isMyTurn, gameState.activePlayerIndex]);
 
   const liveCombatLog = useMemo(() => (
     gameState.actionLog.filter(isCombatLogLine).slice(-18).reverse()
@@ -246,7 +234,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       }, roundDesc[0]);
       await onUpdateState(updatedState);
       setBusyAction(null);
-    }, 400);
+    }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
   const handleOrbitalBombardment = async () => {
@@ -272,26 +260,28 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       const summary = result.report[0] || `${getPlayerName(perspectivePlayerId)} bombarded ${node.name}.`;
       await onUpdateState(stampCombatState(result.state, summary));
       setBusyAction(null);
-    }, 400);
+    }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
   const handleInvadePlanet = async () => {
     if (!canInvadePlanet || busyAction) return;
     setBusyAction('invade');
-    try {
-      audio.playMove();
-      const result = invadePlanetWithCarriers(gameState, node.id, myPlayerId);
-      if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
-      if (result.captured) { audio.playVictory(); setLockedGroundAttackerId(null); }
-      if (result.startedGroundCombat) {
-        setSelectedAttackerGroundId(null);
-        setSelectedDefenderGroundId(null);
+    audio.playMove();
+    setTimeout(async () => {
+      try {
+        const result = invadePlanetWithCarriers(gameState, node.id, myPlayerId);
+        if (result.report.length > 0) setCombatReport(prev => [...result.report, ...prev]);
+        if (result.captured) { audio.playVictory(); setLockedGroundAttackerId(null); }
+        if (result.startedGroundCombat) {
+          setSelectedAttackerGroundId(null);
+          setSelectedDefenderGroundId(null);
+        }
+        const summary = result.report[0] || `${getPlayerName(myPlayerId)} began an invasion at ${node.name}.`;
+        await onUpdateState(stampCombatState(result.state, summary));
+      } finally {
+        setBusyAction(null);
       }
-      const summary = result.report[0] || `${getPlayerName(myPlayerId)} began an invasion at ${node.name}.`;
-      await onUpdateState(stampCombatState(result.state, summary));
-    } finally {
-      setBusyAction(null);
-    }
+    }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
   const handleGroundCombat = () => {
@@ -317,7 +307,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       const summary = result.report[0] || `${getPlayerName(myPlayerId)} fought ground combat at ${node.name}.`;
       await onUpdateState(stampCombatState(result.state, summary));
       setBusyAction(null);
-    }, 400);
+    }, REALTIME_ACTION_SECONDS.combatRound * 1000);
   };
 
   return (
@@ -333,12 +323,12 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
       {isSpectating && (
         <div className="text-center text-xs text-cyan-300 py-3 bg-cyan-950/20 border border-cyan-900/50 rounded flex items-center justify-center gap-2">
           <Eye className="h-4 w-4" />
-          <span>Live spectator view: watching {perspectiveName}'s action phase. Controls are locked until your turn.</span>
+          <span>Live combat feed: watching {perspectiveName}'s engagement.</span>
         </div>
       )}
-      {isMyTurn && !isCombatPhase && (
+      {false && (
         <div className="text-center text-xs text-slate-500 py-3 bg-slate-950/40 border border-slate-900 rounded">
-          Combat options disabled: Must be in ATTACK phase
+          Combat options disabled: no valid target selected.
         </div>
       )}
       {isCombatPhase && !hasAnyCombatWindow && (
@@ -354,7 +344,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
               <Crosshair className="h-3.5 w-3.5" />
               <span>ORBITAL BOMBARDMENT</span>
             </span>
-            <span className="text-[10px] text-slate-500">BattleShips only • once per turn</span>
+            <span className="text-[10px] text-slate-500">BattleShips only • timed bombardment</span>
           </div>
 
           {friendlyTroopsOnSurface && (
@@ -365,7 +355,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
 
           {!friendlyTroopsOnSurface && bombardCapableBattleships.length === 0 && (
             <div className="text-[10px] text-slate-500 italic">
-              No BattleShips available to bombard. Each BattleShip can bombard once per turn.
+              No BattleShips available to bombard right now.
             </div>
           )}
 
@@ -452,7 +442,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
             className="w-full min-h-[44px] py-2.5 bg-red-950/30 border border-red-500 text-red-400 rounded hover:bg-red-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40 scifi-danger-action"
           >
             <Crosshair className="h-4 w-4" />
-            <span>{!isMyTurn ? 'Spectating Invasion' : busyAction === 'invade' ? 'Invading...' : 'Invade Planet'}</span>
+            <span>{!isMyTurn ? 'Invade Planet' : busyAction === 'invade' ? 'Invading...' : 'Invade Planet'}</span>
           </button>
         </div>
       )}
@@ -520,7 +510,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
                 className="w-full py-2.5 bg-red-950/30 border border-red-500 text-red-400 rounded hover:bg-red-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
               >
                 <Crosshair className="h-4 w-4" />
-                <span>{!isMyTurn ? 'Spectating Space Battle' : busyAction === 'space' ? 'Resolving...' : 'Initialize Space Battle'}</span>
+                <span>{!isMyTurn ? 'Space Battle' : busyAction === 'space' ? 'Resolving...' : 'Initialize Space Battle'}</span>
               </button>
             </div>
           )}
@@ -599,7 +589,7 @@ export const CombatPanel: React.FC<CombatPanelProps> = ({
                 className="w-full py-2.5 bg-amber-950/30 border border-amber-500 text-amber-400 rounded hover:bg-amber-900/20 font-bold uppercase text-xs flex items-center justify-center space-x-1.5 disabled:opacity-40"
               >
                 <Crosshair className="h-4 w-4" />
-                <span>{!isMyTurn ? 'Spectating Ground Battle' : busyAction === 'ground' ? 'Resolving...' : 'Attack With Selected Troop'}</span>
+                <span>{!isMyTurn ? 'Ground Battle' : busyAction === 'ground' ? 'Resolving...' : 'Attack With Selected Troop'}</span>
               </button>
             </div>
           )}

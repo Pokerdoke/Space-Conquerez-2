@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { GameState, StarNode, Ship, GroundUnit } from '../types';
 import { audio } from '../services/audio';
 import { Navigation, PackageOpen, Plus, Minus, Shield, Recycle } from 'lucide-react';
 import { HealthBar } from './HealthBar';
-import { SHIP_STATS, loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
+import { SHIP_STATS, loadGroundUnitToCarrier, unloadGroundUnitFromCarrier, loadFighterToCarrier, unloadFighterFromCarrier, getGroundUnitCapacity, countFriendlyGroundUnits, createPendingAction, getBuildDurationSeconds, formatSeconds, cancelRealtimeAction } from '../services/gameLogic';
 
 interface FleetPanelProps {
   node: StarNode;
@@ -25,12 +25,20 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   onUpdateState
 }) => {
   const me = gameState.players.find(p => p.id === myPlayerId);
-  const activePlayer = gameState.players[gameState.activePlayerIndex];
-  const isMyTurn = activePlayer?.id === myPlayerId;
-  const isMovePhase = gameState.phase === 1;
   const isFriendlyNode = node.claimedBy === myPlayerId;
   const [busyTroops, setBusyTroops] = useState<Set<string>>(new Set());
   const [expandedCarrierId, setExpandedCarrierId] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const latestGameStateRef = useRef(gameState);
+
+  useEffect(() => {
+    latestGameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     // When a Realtime/local state update arrives, the server-confirmed state is now visible.
@@ -56,62 +64,82 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     return mappings[color];
   };
 
+  const handleCancelAction = (actionId: string) => {
+    audio.playBeep(260, 0.06);
+    onUpdateState(cancelRealtimeAction(gameState, actionId, myPlayerId));
+  };
+
   const handleSelectShipForMove = (ship: Ship) => {
-    if (!isMyTurn || !isMovePhase) return;
+    if (ship.owner !== myPlayerId || !ship.canMove) return;
     audio.playBeep(600, 0.05);
     onSelectShip(selectedShip?.id === ship.id ? null : ship);
   };
 
+  const finishCarrierTransfer = (key: string, updater: (state: GameState) => GameState) => {
+    window.setTimeout(() => {
+      const latest = latestGameStateRef.current;
+      const updated = updater(latest);
+      latestGameStateRef.current = updated;
+      onUpdateState(updated);
+      setBusyTroops(prev => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }, 1500);
+  };
+
   const handleColonize = (colonyShip: Ship) => {
-    if (!isMyTurn || gameState.phase !== 2 || node.claimedBy !== null || node.groundUnits.length > 0) return;
+    if (colonyShip.owner !== myPlayerId || node.claimedBy !== null || node.groundUnits.length > 0) return;
     audio.playColonize();
-    const updatedNodes = gameState.nodes.map(n => {
-      if (n.id !== node.id) return n;
-      return {
-        ...n,
-        claimedBy: myPlayerId,
-        development: 'colony' as const,
-        resourceGeneration: 2,
-        ships: n.ships.filter(s => s.id !== colonyShip.id),
-        isNpcPlanet: false
-      };
+    const durationSeconds = getBuildDurationSeconds('colonize');
+    const pendingAction = createPendingAction({
+      type: 'colonize',
+      playerId: myPlayerId,
+      nodeId: node.id,
+      shipId: colonyShip.id,
+      durationSeconds,
+      label: `Colonize ${node.name}`
     });
     onSelectShip(null);
     onUpdateState({
       ...gameState,
-      nodes: updatedNodes,
-      actionLog: [...gameState.actionLog, `${me.name}: Colonized system ${node.name}. Colony ship consumed.`],
-      lastAction: 'colonize',
-      lastActionAt: new Date().toISOString()
+      pendingActions: [...(gameState.pendingActions || []), pendingAction],
+      actionLog: [...gameState.actionLog, `${me.name}: Started colonizing ${node.name}; completes in ${formatSeconds(durationSeconds)}.`],
+      lastAction: 'queue_colonize',
+      lastActionAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
     });
   };
 
   const handleScrapShip = (ship: Ship) => {
     const key = troopButtonKey('scrap', ship.id, 'ship');
     const hasCargo = ship.type === 'Carrier' && (ship.carriedUnits.length > 0 || ship.carriedFighters.length > 0);
-    const canScrap = isMyTurn && ship.owner === myPlayerId && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCargo;
+    const canScrap = ship.owner === myPlayerId && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCargo;
     if (!canScrap || busyTroops.has(key)) return;
 
     const refund = Math.floor(SHIP_STATS[ship.type].cost * 0.75);
+    const durationSeconds = getBuildDurationSeconds('scrap_ship');
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBuild();
 
-    const updatedNodes = gameState.nodes.map(n => {
-      if (n.id !== node.id) return n;
-      return { ...n, ships: n.ships.filter(s => s.id !== ship.id) };
+    const pendingAction = createPendingAction({
+      type: 'scrap_ship',
+      playerId: myPlayerId,
+      nodeId: node.id,
+      shipId: ship.id,
+      durationSeconds,
+      label: `Scrap ${ship.type} at ${node.name}`
     });
-    const updatedPlayers = gameState.players.map(p => (
-      p.id === myPlayerId ? { ...p, resources: p.resources + refund } : p
-    ));
 
     if (selectedShip?.id === ship.id) onSelectShip(null);
     onUpdateState({
       ...gameState,
-      nodes: updatedNodes,
-      players: updatedPlayers,
-      actionLog: [...gameState.actionLog, `${me.name}: Scrapped ${ship.type} at ${node.name} for ${refund}R.`],
-      lastAction: 'scrap_ship',
-      lastActionAt: new Date().toISOString()
+      pendingActions: [...(gameState.pendingActions || []), pendingAction],
+      actionLog: [...gameState.actionLog, `${me.name}: Started scrapping ${ship.type} at ${node.name}; +${refund}R in ${formatSeconds(durationSeconds)}.`],
+      lastAction: 'queue_scrap_ship',
+      lastActionAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
     });
   };
 
@@ -120,7 +148,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     if (busyTroops.has(key)) return;
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBeep(700, 0.04);
-    onUpdateState(loadGroundUnitToCarrier(gameState, node.id, carrier.id, unit.id, myPlayerId));
+    finishCarrierTransfer(key, latest => loadGroundUnitToCarrier(latest, node.id, carrier.id, unit.id, myPlayerId));
   };
 
   const handleUnloadTroop = (carrier: Ship, unit: GroundUnit) => {
@@ -128,7 +156,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     if (busyTroops.has(key) || surfaceFull) return;
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBeep(600, 0.04);
-    onUpdateState(unloadGroundUnitFromCarrier(gameState, node.id, carrier.id, unit.id, myPlayerId));
+    finishCarrierTransfer(key, latest => unloadGroundUnitFromCarrier(latest, node.id, carrier.id, unit.id, myPlayerId));
   };
 
   const handleLoadFighter = (carrier: Ship, fighter: Ship) => {
@@ -136,7 +164,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     if (busyTroops.has(key)) return;
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBeep(740, 0.04);
-    onUpdateState(loadFighterToCarrier(gameState, node.id, carrier.id, fighter.id, myPlayerId));
+    finishCarrierTransfer(key, latest => loadFighterToCarrier(latest, node.id, carrier.id, fighter.id, myPlayerId));
   };
 
   const handleUnloadFighter = (carrier: Ship, fighter: Ship) => {
@@ -144,7 +172,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
     if (busyTroops.has(key)) return;
     setBusyTroops(prev => new Set(prev).add(key));
     audio.playBeep(540, 0.04);
-    onUpdateState(unloadFighterFromCarrier(gameState, node.id, carrier.id, fighter.id, myPlayerId));
+    finishCarrierTransfer(key, latest => unloadFighterFromCarrier(latest, node.id, carrier.id, fighter.id, myPlayerId));
   };
 
   const friendlyGroundUnits = node.groundUnits.filter(g => g.owner === myPlayerId);
@@ -153,13 +181,42 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
   const friendlySurfaceCount = countFriendlyGroundUnits(node, myPlayerId);
   const groundUnitCapacity = getGroundUnitCapacity(node.development);
   const surfaceFull = friendlySurfaceCount >= groundUnitCapacity;
-  const canManageTroops = isMyTurn && isMovePhase && isFriendlyNode;
+  const canManageTroops = isFriendlyNode;
 
   return (
     <div className="space-y-4 max-h-[350px] overflow-y-auto p-1">
-      {!isMyTurn && (
-        <div className="text-center text-xs text-slate-500 py-3 bg-slate-950/40 border border-slate-900 rounded font-mono">
-          Waiting for {activePlayer?.name || 'the active player'} — fleet orders disabled.
+
+
+      {(gameState.pendingActions || []).filter(action => action.nodeId === node.id || action.targetNodeId === node.id).length > 0 && (
+        <div className="rounded border border-cyan-900/60 bg-cyan-950/15 p-3 space-y-1 font-mono">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Active real-time orders</div>
+          {(gameState.pendingActions || []).filter(action => action.nodeId === node.id || action.targetNodeId === node.id).map(action => {
+            const remaining = Math.max(0, Math.ceil((new Date(action.completesAt).getTime() - now) / 1000));
+            return (
+              <div key={action.id} className="space-y-1 rounded border border-cyan-950/40 bg-slate-950/30 px-2 py-1.5 text-[10px] text-slate-300">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate">{action.label}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-cyan-300 font-bold">{remaining}s</span>
+                    {action.playerId === myPlayerId && (
+                      <button
+                        onClick={() => handleCancelAction(action.id)}
+                        className="rounded border border-red-900/50 bg-red-950/40 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-red-300 hover:border-red-400 hover:text-red-100"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-900 border border-slate-800">
+                  <div
+                    className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, ((now - new Date(action.startedAt).getTime()) / Math.max(1, new Date(action.completesAt).getTime() - new Date(action.startedAt).getTime())) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -178,13 +235,13 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
               const isOwner = ship.owner === myPlayerId;
               const isCurrentlySelected = selectedShip?.id === ship.id;
               const isCarrier = ship.type === 'Carrier';
-              const canMoveThisShip = isMyTurn && isOwner && isMovePhase && ship.canMove && ship.movesLeft > 0;
-              const canColonize = isMyTurn && isOwner && gameState.phase === 2 && ship.type === 'ColonyShip' && node.claimedBy === null && node.groundUnits.length === 0;
+              const canMoveThisShip = isOwner && ship.canMove && ship.movesLeft > 0;
+              const canColonize = isOwner && ship.type === 'ColonyShip' && node.claimedBy === null && node.groundUnits.length === 0;
               const carrierExpanded = expandedCarrierId === ship.id;
               const scrapKey = troopButtonKey('scrap', ship.id, 'ship');
               const scrapRefund = Math.floor(SHIP_STATS[ship.type].cost * 0.75);
               const hasCarrierCargo = ship.type === 'Carrier' && (ship.carriedUnits.length > 0 || ship.carriedFighters.length > 0);
-              const canScrapShip = isMyTurn && isOwner && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCarrierCargo;
+              const canScrapShip = isOwner && isFriendlyNode && node.hasShipyard && ship.hp >= ship.maxHp && !hasCarrierCargo;
               const scrapDisabledReason = !node.hasShipyard
                 ? 'Requires a friendly shipyard in this system.'
                 : ship.hp < ship.maxHp
@@ -218,7 +275,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
 
                     {isOwner && (
                       <div className="flex items-center flex-wrap justify-end gap-1.5">
-                        {isMovePhase && ship.canMove && (
+                        {ship.canMove && (
                           <button
                             onClick={() => handleSelectShipForMove(ship)}
                             disabled={!canMoveThisShip}
@@ -333,7 +390,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
                         <div className="border border-indigo-950 bg-indigo-950/15 p-3 rounded space-y-3 animate-fadeIn">
                           {!canManageTroops && (
                             <div className="text-[10px] text-slate-500 bg-slate-950/50 border border-slate-900 p-2 rounded">
-                              Troop loading/unloading requires your Move phase on a friendly node.
+                              Troop loading/unloading requires a friendly node.
                             </div>
                           )}
 
@@ -432,6 +489,9 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({
           </div>
         )}
       </div>
+
+
+
 
       <div>
         <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">

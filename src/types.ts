@@ -24,6 +24,10 @@ export interface GroundUnit {
 }
 
 export interface Ship {
+  /** True while this ship is queued for a real-time movement action. */
+  inTransit?: boolean;
+  transitToNodeId?: string | null;
+  transitCompletesAt?: string | null;
   id: string;
   type: 'Destroyer' | 'BattleShip' | 'Carrier' | 'ColonyShip' | 'Fighter';
   owner: string; // Player.id
@@ -68,6 +72,8 @@ export interface StarNode {
 
 export type PlanetBiome = 'ocean' | 'tropical' | 'continental' | 'savannah' | 'desert' | 'arid' | 'tundra' | 'alpine' | 'arctic' | 'gas' | 'rock';
 
+export type GalaxyType = 'spiral2' | 'spiral3' | 'spiral4' | 'ring' | 'circular';
+
 export interface Alliance {
   id: string;
   playerIds: [string, string];
@@ -85,12 +91,32 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export interface PendingRealtimeAction {
+  id: string;
+  type: 'build_ship' | 'build_ground' | 'upgrade_planet' | 'build_structure' | 'deconstruct_structure' | 'move_ship' | 'colonize' | 'scrap_ship';
+  playerId: string;
+  nodeId: string;
+  targetNodeId?: string;
+  shipId?: string;
+  ship?: Ship;
+  shipType?: Ship['type'];
+  structureType?: 'Shipyard' | 'FtlInhibitor' | 'Gateway';
+  targetDevelopment?: PlanetDevelopment;
+  startedAt: string;
+  completesAt: string;
+  durationSeconds: number;
+  label: string;
+  /** Resources refunded if this queued order is cancelled before completion. */
+  refundCost?: number;
+}
+
 export interface GameState {
   roomId: string;
   name: string;
   creatorId: string;
   maxPlayers: number;
   mapSize: 'small' | 'medium' | 'large';
+  galaxyType?: GalaxyType;
   npcCount: number;
   /** True when the lobby appears in the public games browser. */
   isPublic?: boolean;
@@ -112,7 +138,9 @@ export interface GameState {
   activeCombatUpdatedAt?: string;
   activeCombatSummary?: string;
   turnTimerMinutes?: number; // Optional turn timer
-  turnStartedAt?: string; // ISO string when current turn/phase started
+  turnStartedAt?: string; // Legacy field kept for old saves.
+  realtimeIncomeLastAt?: string; // Last global income tick for real-time mode.
+  pendingActions?: PendingRealtimeAction[];
   tutorialScenario?: {
     id: string;
     title: string;

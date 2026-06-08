@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { GameState, StarNode, Ship } from '../types';
-import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createShip, createGroundUnit, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit, getGroundUnitCapacity, countFriendlyGroundUnits } from '../services/gameLogic';
+import { SHIP_STATS, GROUND_UNIT_STATS, STRUCTURE_COSTS, createPendingAction, getBuildDurationSeconds, formatSeconds, getPlanetUpgradeTarget, getPlanetUpgradeCost, getPlanetResourceGeneration, getGroundUnitBuildLimit, getGroundUnitCapacity, countFriendlyGroundUnits, cancelRealtimeAction } from '../services/gameLogic';
 import { audio } from '../services/audio';
 import { Shield, Star, Anchor } from 'lucide-react';
 
@@ -14,6 +14,23 @@ interface BuildPanelProps {
 type StructureType = 'Shipyard' | 'FtlInhibitor' | 'Gateway';
 type BuildAction = 'upgrade' | StructureType | 'GroundUnit' | Ship['type'] | `deconstruct-${StructureType}`;
 
+const INFRASTRUCTURE_ACTION_TYPES = new Set(['upgrade_planet', 'build_structure', 'deconstruct_structure']);
+
+const isInfrastructureBuildAction = (action: BuildAction) =>
+  action === 'upgrade' ||
+  action === 'Shipyard' ||
+  action === 'FtlInhibitor' ||
+  action === 'Gateway' ||
+  String(action).startsWith('deconstruct-');
+
+const getInfrastructureActionIcon = (actionType: string, detail?: string) => {
+  if (actionType === 'upgrade_planet') return '↑';
+  if (detail === 'Shipyard') return '⚓';
+  if (detail === 'FtlInhibitor') return '⛨';
+  if (detail === 'Gateway') return '✦';
+  return '▣';
+};
+
 export const BuildPanel: React.FC<BuildPanelProps> = ({
   node,
   gameState,
@@ -22,27 +39,37 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 }) => {
   const pendingRef = useRef(false);
   const [busyAction, setBusyAction] = useState<BuildAction | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   // Always use the freshest node/player from the current game state. Without this, the UI could
   // keep showing stale build counters/development until the player clicked another planet and back.
   const currentNode = gameState.nodes.find(n => n.id === node.id) || node;
   const me = gameState.players.find(p => p.id === myPlayerId);
-  const activePlayer = gameState.players[gameState.activePlayerIndex];
-  const isMyTurn = activePlayer?.id === myPlayerId;
-  const isBuildPhase = gameState.phase === 0;
   const isOwner = currentNode.claimedBy === myPlayerId;
-  const canBuild = Boolean(me && isMyTurn && isBuildPhase && isOwner);
+  const canBuild = Boolean(me && isOwner);
   const isBusy = busyAction !== null;
+  const pendingHere = (gameState.pendingActions || []).filter(action => action.nodeId === currentNode.id);
+  const pendingGroundHere = pendingHere.filter(action => action.type === 'build_ground' && action.playerId === myPlayerId).length;
+  const shipyardShipQueue = pendingHere.filter(action => action.type === 'build_ship').length;
+  const shipyardQueueFull = shipyardShipQueue >= 5;
+  const pendingInfrastructureHere = pendingHere.find(action => INFRASTRUCTURE_ACTION_TYPES.has(action.type));
+  const infrastructureLocked = Boolean(pendingInfrastructureHere);
+  const canStartInfrastructure = canBuild && !isBusy && !infrastructureLocked;
 
   if (!me) return null;
 
-  const groundUnitsBuilt = currentNode.groundUnitsBuiltThisTurn ?? 0;
+  const groundUnitsBuilt = pendingGroundHere;
   const maxGroundUnits = getGroundUnitBuildLimit(currentNode.development);
-  const perTurnCapReached = maxGroundUnits > 0 && groundUnitsBuilt >= maxGroundUnits;
+  const perTurnCapReached = maxGroundUnits > 0 && pendingGroundHere >= maxGroundUnits;
   const surfaceFriendlyGround = countFriendlyGroundUnits(currentNode, myPlayerId);
   const groundUnitCapacity = getGroundUnitCapacity(currentNode.development);
   const surfaceCapReached = surfaceFriendlyGround >= groundUnitCapacity;
-  const groundUnitsCapReached = perTurnCapReached || surfaceCapReached;
+  const groundUnitsCapReached = perTurnCapReached || surfaceCapReached || (surfaceFriendlyGround + pendingGroundHere >= groundUnitCapacity);
   const canBuildGroundUnit = canBuild && !isBusy && maxGroundUnits > 0 && !groundUnitsCapReached && me.resources >= GROUND_UNIT_STATS.cost;
 
   const beginAction = (action: BuildAction) => {
@@ -67,24 +94,57 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
     try {
       const latestPlayer = gameState.players.find(p => p.id === myPlayerId);
-      const latestActive = gameState.players[gameState.activePlayerIndex];
       const latestNode = gameState.nodes.find(n => n.id === currentNode.id);
-      const stillCanBuild = latestPlayer && latestActive?.id === myPlayerId && gameState.phase === 0 && latestNode?.claimedBy === myPlayerId;
+      const stillCanBuild = latestPlayer && latestNode?.claimedBy === myPlayerId;
       if (!latestPlayer || !latestNode || !stillCanBuild || latestPlayer.resources < amount) return;
 
-      const updatedNodes = gameState.nodes.map(n => {
-        if (n.id !== latestNode.id) return n;
-        const copy: StarNode = {
-          ...n,
-          ships: [...n.ships],
-          groundUnits: [...n.groundUnits]
-        };
-        const applied = applyChanges(copy);
-        return applied === false ? n : copy;
-      });
+      const latestInfrastructureBusy = (gameState.pendingActions || []).some(
+        pending => pending.nodeId === latestNode.id && INFRASTRUCTURE_ACTION_TYPES.has(pending.type)
+      );
+      if (isInfrastructureBuildAction(action) && latestInfrastructureBusy) return;
 
-      const didChange = updatedNodes.some((n, idx) => n !== gameState.nodes[idx]);
-      if (!didChange) return;
+      const testNode: StarNode = {
+        ...latestNode,
+        ships: [...latestNode.ships],
+        groundUnits: [...latestNode.groundUnits]
+      };
+      const applied = applyChanges(testNode);
+      if (applied === false) return;
+      const changed = JSON.stringify(testNode) !== JSON.stringify({ ...latestNode, ships: [...latestNode.ships], groundUnits: [...latestNode.groundUnits] });
+      if (!changed) return;
+
+      let pendingType: 'build_ship' | 'build_ground' | 'upgrade_planet' | 'build_structure' | 'deconstruct_structure' = 'build_ground';
+      let shipType: Ship['type'] | undefined;
+      let structureType: StructureType | undefined;
+      let targetDevelopment: StarNode['development'] | undefined;
+
+      if (action === 'GroundUnit') pendingType = 'build_ground';
+      else if (action === 'upgrade') {
+        pendingType = 'upgrade_planet';
+        targetDevelopment = testNode.development;
+      } else if (String(action).startsWith('deconstruct-')) {
+        pendingType = 'deconstruct_structure';
+        structureType = String(action).replace('deconstruct-', '') as StructureType;
+      } else if (action === 'Shipyard' || action === 'FtlInhibitor' || action === 'Gateway') {
+        pendingType = 'build_structure';
+        structureType = action;
+      } else {
+        pendingType = 'build_ship';
+        shipType = action as Ship['type'];
+      }
+
+      const durationSeconds = getBuildDurationSeconds(pendingType, shipType || structureType || targetDevelopment);
+      const pendingAction = createPendingAction({
+        type: pendingType,
+        playerId: myPlayerId,
+        nodeId: latestNode.id,
+        shipType,
+        structureType,
+        targetDevelopment,
+        durationSeconds,
+        label: logMsg,
+        refundCost: amount
+      });
 
       audio.playBuild();
       const updatedPlayers = gameState.players.map(p =>
@@ -95,9 +155,9 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
       const updatedState: GameState = {
         ...gameState,
         players: updatedPlayers,
-        nodes: updatedNodes,
-        actionLog: [...gameState.actionLog, `${latestPlayer.name}: ${logMsg} (Turn ${gameState.turnNumber})`],
-        lastAction: `build_${String(action).toLowerCase()}`,
+        pendingActions: [...(gameState.pendingActions || []), pendingAction],
+        actionLog: [...gameState.actionLog, `${latestPlayer.name}: Started ${logMsg}; completes in ${formatSeconds(durationSeconds)}.`],
+        lastAction: `queue_${String(action).toLowerCase()}`,
         lastActionAt: timestamp,
         lastUpdated: timestamp
       };
@@ -148,71 +208,54 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
   };
 
   const handleDeconstructStructure = async (struct: StructureType) => {
-    if (!beginAction(`deconstruct-${struct}`)) return;
-    try {
-      const latestPlayer = gameState.players.find(p => p.id === myPlayerId);
-      const latestNode = gameState.nodes.find(n => n.id === currentNode.id);
-      if (!latestPlayer || !latestNode || !canBuild) return;
+    const refund = Math.floor(STRUCTURE_COSTS[struct] / 2);
+    const desc =
+      struct === 'Shipyard'
+        ? `Deconstructed Shipyard on ${currentNode.name} (+${refund}R on completion)`
+        : struct === 'FtlInhibitor'
+          ? `Deconstructed FTL Inhibitor on ${currentNode.name} (+${refund}R on completion)`
+          : `Deconstructed Gateway on ${currentNode.name} (+${refund}R on completion)`;
 
-      const hasStructure = struct === 'Shipyard' ? latestNode.hasShipyard : struct === 'FtlInhibitor' ? latestNode.hasFtlInhibitor : latestNode.hasGateway;
-      if (!hasStructure) return;
-
-      const refund = Math.floor(STRUCTURE_COSTS[struct] / 2);
-      const desc =
-        struct === 'Shipyard'
-          ? `Deconstructed Shipyard on ${latestNode.name} (+${refund}R)`
-          : struct === 'FtlInhibitor'
-            ? `Deconstructed FTL Inhibitor on ${latestNode.name} (+${refund}R)`
-            : `Deconstructed Gateway on ${latestNode.name} (+${refund}R)`;
-
-      audio.playBuild();
-      const updatedPlayers = gameState.players.map(p =>
-        p.id === myPlayerId ? { ...p, resources: p.resources + refund } : p
-      );
-      const updatedNodes = gameState.nodes.map(n => {
-        if (n.id !== latestNode.id) return n;
-        const copy = { ...n };
-        if (struct === 'Shipyard') copy.hasShipyard = false;
-        else if (struct === 'FtlInhibitor') copy.hasFtlInhibitor = false;
-        else copy.hasGateway = false;
-        return copy;
-      });
-      const timestamp = new Date().toISOString();
-      await onUpdateState({
-        ...gameState,
-        players: updatedPlayers,
-        nodes: updatedNodes,
-        actionLog: [...gameState.actionLog, `${latestPlayer.name}: ${desc} (Turn ${gameState.turnNumber})`],
-        lastAction: `deconstruct_${struct.toLowerCase()}`,
-        lastActionAt: timestamp,
-        lastUpdated: timestamp
-      });
-    } finally {
-      endAction();
-    }
+    await spendResources(`deconstruct-${struct}`, 0, desc, (n) => {
+      if (struct === 'Shipyard') {
+        if (!n.hasShipyard) return false;
+        n.hasShipyard = false;
+      } else if (struct === 'FtlInhibitor') {
+        if (!n.hasFtlInhibitor) return false;
+        n.hasFtlInhibitor = false;
+      } else {
+        if (!n.hasGateway) return false;
+        n.hasGateway = false;
+      }
+    });
   };
 
   const handleBuildShip = async (shipType: Ship['type']) => {
+    if (shipyardQueueFull) return;
     const cost = SHIP_STATS[shipType].cost;
     await spendResources(shipType, cost, `Built ${shipType} at ${currentNode.name}`, (n) => {
-      if (!n.hasShipyard) return false;
-      n.ships.push(createShip(shipType, myPlayerId));
+      if (!n.hasShipyard || shipyardQueueFull) return false;
+      n.ships.push({ ...(n.ships[0] as Ship | undefined), id: `pending-${shipType}`, type: shipType } as Ship);
     });
   };
 
   const handleBuildGroundUnit = async () => {
     const latestNode = gameState.nodes.find(n => n.id === currentNode.id) || currentNode;
     const latestMax = getGroundUnitBuildLimit(latestNode.development);
-    const latestBuilt = latestNode.groundUnitsBuiltThisTurn ?? 0;
-    if (latestMax <= 0 || latestBuilt >= latestMax || countFriendlyGroundUnits(latestNode, myPlayerId) >= getGroundUnitCapacity(latestNode.development)) return;
+    const queuedGround = (gameState.pendingActions || []).filter(action => action.nodeId === latestNode.id && action.type === 'build_ground' && action.playerId === myPlayerId).length;
+    if (latestMax <= 0 || queuedGround >= latestMax || countFriendlyGroundUnits(latestNode, myPlayerId) >= getGroundUnitCapacity(latestNode.development)) return;
 
     await spendResources('GroundUnit', GROUND_UNIT_STATS.cost, `Built Ground Unit at ${latestNode.name}`, (n) => {
       const nodeMax = getGroundUnitBuildLimit(n.development);
-      const built = n.groundUnitsBuiltThisTurn ?? 0;
-      if (nodeMax <= 0 || built >= nodeMax || countFriendlyGroundUnits(n, myPlayerId) >= getGroundUnitCapacity(n.development)) return false;
-      n.groundUnits.push(createGroundUnit(myPlayerId));
-      n.groundUnitsBuiltThisTurn = built + 1;
+      const queued = (gameState.pendingActions || []).filter(action => action.nodeId === n.id && action.type === 'build_ground' && action.playerId === myPlayerId).length;
+      if (nodeMax <= 0 || queued >= nodeMax || countFriendlyGroundUnits(n, myPlayerId) >= getGroundUnitCapacity(n.development)) return false;
+      n.groundUnits.push({ id: 'pending-ground', type: 'GroundUnit', owner: myPlayerId, hp: 1, maxHp: 1, dmgMin: 0, dmgMax: 0, turnsInTerritory: 0 });
     });
+  };
+
+  const handleCancelAction = async (actionId: string) => {
+    audio.playBeep(260, 0.06);
+    await onUpdateState(cancelRealtimeAction(gameState, actionId, myPlayerId));
   };
 
   const nextDev = getPlanetUpgradeTarget(currentNode.development, currentNode, gameState.nodes, myPlayerId);
@@ -222,20 +265,24 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
 
   return (
     <div className="h-full min-h-0 space-y-5 p-1 overflow-y-auto overscroll-contain pb-28">
+
       {!canBuild && (
         <div className="text-center text-xs text-slate-500 py-4 bg-slate-950/40 border border-slate-900 rounded font-mono">
           {!isOwner
             ? 'Build screen unavailable: System not owned by your Empire'
-            : !isMyTurn
-              ? `View only: Waiting for ${activePlayer?.name || 'another player'}`
-              : !isBuildPhase
-                ? 'View only: Build actions require the BUILD phase'
-                : 'Build options disabled'}
+            : 'Build options disabled'}
         </div>
       )}
 
       {isOwner && (
         <div className="space-y-4">
+          {pendingInfrastructureHere && (
+            <div className="rounded border border-indigo-900/50 bg-indigo-950/20 px-3 py-2 font-mono text-[10px] text-indigo-200">
+              <span className="font-bold uppercase tracking-wider text-indigo-300">Infrastructure busy:</span>{' '}
+              {pendingInfrastructureHere.label}. Only one planet upgrade/structure job can run here at once.
+            </div>
+          )}
+
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
               Planet Infrastructure
@@ -244,12 +291,15 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {nextDev ? (
                 <button
                   onClick={handleUpgradePlanet}
-                  disabled={!canBuild || isBusy || me.resources < upgradeCost}
+                  disabled={!canStartInfrastructure || me.resources < upgradeCost}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-indigo-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
-                  <div className="text-left">
-                    <span className="block text-xs font-bold text-slate-300">{busyAction === 'upgrade' ? 'Upgrading...' : 'Upgrade Planet'}</span>
-                    <span className="text-[9px] text-slate-500 font-mono capitalize">to {nextDev} | Gen {currentGeneration}→{nextGeneration}/turn</span>
+                  <div className="flex min-w-0 items-center gap-2 text-left">
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-indigo-700/50 bg-indigo-950/40 text-sm font-black text-indigo-200">↑</span>
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-300">{infrastructureLocked ? 'Infrastructure Busy' : busyAction === 'upgrade' ? 'Upgrading...' : 'Upgrade Planet'}</span>
+                      <span className="text-[9px] text-slate-500 font-mono capitalize">to {nextDev} | Gen {currentGeneration}→{nextGeneration}/tick</span>
+                    </div>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">
                     {upgradeCost}R
@@ -264,12 +314,15 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasShipyard ? (
                 <button
                   onClick={() => handleBuildStructure('Shipyard')}
-                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.Shipyard}
+                  disabled={!canStartInfrastructure || me.resources < STRUCTURE_COSTS.Shipyard}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-cyan-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
-                  <div className="text-left">
-                    <span className="block text-xs font-bold text-slate-300">Build Shipyard</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Allows ship construction</span>
+                  <div className="flex min-w-0 items-center gap-2 text-left">
+                    <Anchor className="h-5 w-5 shrink-0 text-cyan-300" />
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-300">{infrastructureLocked ? 'Infrastructure Busy' : 'Build Shipyard'}</span>
+                      <span className="text-[9px] text-slate-500 font-mono">Allows ship construction</span>
+                    </div>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.Shipyard}R</span>
                 </button>
@@ -281,7 +334,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Shipyard')}
-                    disabled={!canBuild || isBusy}
+                    disabled={!canStartInfrastructure}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Shipyard / 2)}R)</span>
@@ -292,12 +345,15 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasFtlInhibitor ? (
                 <button
                   onClick={() => handleBuildStructure('FtlInhibitor')}
-                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.FtlInhibitor}
+                  disabled={!canStartInfrastructure || me.resources < STRUCTURE_COSTS.FtlInhibitor}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-red-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
-                  <div className="text-left">
-                    <span className="block text-xs font-bold text-slate-300">FTL Inhibitor</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Blocks enemy ships transit</span>
+                  <div className="flex min-w-0 items-center gap-2 text-left">
+                    <Shield className="h-5 w-5 shrink-0 text-red-300" />
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-300">{infrastructureLocked ? 'Infrastructure Busy' : 'FTL Inhibitor'}</span>
+                      <span className="text-[9px] text-slate-500 font-mono">Blocks enemy ships transit</span>
+                    </div>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.FtlInhibitor}R</span>
                 </button>
@@ -309,7 +365,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('FtlInhibitor')}
-                    disabled={!canBuild || isBusy}
+                    disabled={!canStartInfrastructure}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.FtlInhibitor / 2)}R)</span>
@@ -320,12 +376,15 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               {!currentNode.hasGateway ? (
                 <button
                   onClick={() => handleBuildStructure('Gateway')}
-                  disabled={!canBuild || isBusy || me.resources < STRUCTURE_COSTS.Gateway}
+                  disabled={!canStartInfrastructure || me.resources < STRUCTURE_COSTS.Gateway}
                   className="flex items-center justify-between p-2.5 border border-slate-800 bg-slate-950/60 rounded hover:border-purple-500/50 hover:bg-slate-900/60 disabled:opacity-40 transition-all"
                 >
-                  <div className="text-left">
-                    <span className="block text-xs font-bold text-slate-300">Jump Gateway</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Enables instant teleportation</span>
+                  <div className="flex min-w-0 items-center gap-2 text-left">
+                    <Star className="h-5 w-5 shrink-0 text-purple-300" />
+                    <div className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-300">{infrastructureLocked ? 'Infrastructure Busy' : 'Jump Gateway'}</span>
+                      <span className="text-[9px] text-slate-500 font-mono">Enables instant teleportation</span>
+                    </div>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/20 border border-amber-800/40 px-1.5 py-0.5 rounded">{STRUCTURE_COSTS.Gateway}R</span>
                 </button>
@@ -337,7 +396,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                   </div>
                   <button
                     onClick={() => handleDeconstructStructure('Gateway')}
-                    disabled={!canBuild || isBusy}
+                    disabled={!canStartInfrastructure}
                     className="flex items-center justify-center space-x-1 p-1 border border-red-900/40 bg-red-950/20 rounded text-red-400 text-[9px] font-mono hover:bg-red-950/40 disabled:opacity-40 transition-all"
                   >
                     <span>⚠ Deconstruct (+{Math.floor(STRUCTURE_COSTS.Gateway / 2)}R)</span>
@@ -354,7 +413,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 <span className="text-red-400 lowercase font-normal italic">Requires City+</span>
               ) : (
                 <span className={`${groundUnitsCapReached ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>
-                  Built: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{groundUnitCapacity}
+                  Queued: {groundUnitsBuilt}/{maxGroundUnits} | Surface: {surfaceFriendlyGround}/{groundUnitCapacity}
                 </span>
               )}
             </span>
@@ -379,7 +438,7 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
           <div>
             <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono flex justify-between">
               <span>Orbital Dockyards</span>
-              {!currentNode.hasShipyard && <span className="text-red-400 lowercase font-normal italic">Requires Shipyard</span>}
+              {!currentNode.hasShipyard ? <span className="text-red-400 lowercase font-normal italic">Requires Shipyard</span> : <span className={`${shipyardQueueFull ? 'text-red-400' : 'text-slate-500'} lowercase font-normal`}>Queue: {shipyardShipQueue}/5</span>}
             </span>
             <div className="grid grid-cols-2 gap-2">
               {(Object.keys(SHIP_STATS) as Array<keyof typeof SHIP_STATS>).map((type) => {
@@ -389,12 +448,12 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
                 return (
                   <button
                     key={type}
-                    disabled={!canBuild || isBusy || !satisfiesShipyard || !canAfford}
+                    disabled={!canBuild || isBusy || !satisfiesShipyard || !canAfford || shipyardQueueFull}
                     onClick={() => handleBuildShip(type)}
                     className="flex items-center justify-between p-2 border border-slate-800 bg-slate-950/40 rounded hover:border-cyan-500/30 hover:bg-slate-900/40 disabled:opacity-30 transition-all text-left"
                   >
                     <div>
-                      <span className="block text-xs font-semibold text-slate-300">{busyAction === type ? 'Building...' : type}</span>
+                      <span className="block text-xs font-semibold text-slate-300">{shipyardQueueFull ? 'Queue Full' : busyAction === type ? 'Building...' : type}</span>
                       <span className="text-[8px] text-slate-500 font-mono block">HP:{s.hp} | DMG:{s.dmgMin}-{s.dmgMax}</span>
                     </div>
                     <span className="text-xs font-mono font-bold text-amber-500 bg-amber-950/25 border border-amber-900/30 px-1.5 py-0.5 rounded">{s.cost}R</span>
@@ -403,6 +462,46 @@ export const BuildPanel: React.FC<BuildPanelProps> = ({
               })}
             </div>
           </div>
+        </div>
+      )}
+
+
+
+      {pendingHere.length > 0 && (
+        <div className="rounded border border-cyan-900/60 bg-cyan-950/15 p-3 space-y-1 font-mono">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Real-time work queue</div>
+          {pendingHere.map(action => {
+            const remaining = Math.max(0, Math.ceil((new Date(action.completesAt).getTime() - now) / 1000));
+            return (
+              <div key={action.id} className="space-y-1 rounded border border-cyan-950/40 bg-slate-950/30 px-2 py-1.5 text-[10px] text-slate-300">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5 truncate">
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-cyan-800/50 bg-cyan-950/40 text-[10px] text-cyan-200">
+                      {getInfrastructureActionIcon(action.type, action.structureType || action.targetDevelopment || action.shipType)}
+                    </span>
+                    <span className="truncate">{action.label}</span>
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-cyan-300 font-bold">{remaining}s</span>
+                    {action.playerId === myPlayerId && (
+                      <button
+                        onClick={() => handleCancelAction(action.id)}
+                        className="rounded border border-red-900/50 bg-red-950/40 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-red-300 hover:border-red-400 hover:text-red-100"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-900 border border-slate-800">
+                  <div
+                    className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, ((now - new Date(action.startedAt).getTime()) / Math.max(1, new Date(action.completesAt).getTime() - new Date(action.startedAt).getTime())) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
